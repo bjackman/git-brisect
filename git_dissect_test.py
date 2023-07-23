@@ -58,6 +58,7 @@ class TestGitDissect(unittest.TestCase):
         self.assertEqual(git_dissect.dissect(["run.sh"]), bad, f"good: {good} bad: {bad}")
 
     def test_smoke(self):
+        # Linear history where the code gets broken in the middle.
         self.write_executable("run.sh", "true")
         good = self.commit()
         self.commit()
@@ -71,15 +72,37 @@ class TestGitDissect(unittest.TestCase):
 
         self.logger.info(self.git("log", "--graph", "--all", "--format=%H %d"))
 
-        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want, f"good: {good} bad: {bad}")
+        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+
+    def test_nonlinear_multiple_good(self):
+        # Linear history where the code is good in both branches and then broken after a merge
+        self.write_executable("run.sh", "true")
+        base = self.commit()
+        good1 = self.commit()
+        self.git("checkout", base)
+        good2 = self.commit()
+        self.git("merge", good2)
+        self.write_executable("run.sh", "exit 1")
+        want = self.commit()
+        bad = self.commit()
+
+        self.git("bisect", "start")
+        self.git("bisect", "good", good1)
+        self.git("bisect", "good", good2)
+        self.git("bisect", "bad", bad)
+
+        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+
+
+    # TODO: above case but it gets broke in one of the branches
 
     # TODO:
-    #  linear case
     #  nonlinear, multiple good
     #  nonlinear, single good
     #  worktree mode (check run in expected dir)
     #  non-worktree mode
     #  replacing args
+    #  ensuring script isn't run more times than necessary
     #  ensuring test cleanups happen
     #  gathering output
     #  bisect should get reset afterwardsj
