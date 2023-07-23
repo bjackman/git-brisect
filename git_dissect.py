@@ -169,7 +169,17 @@ def do_dissect(args, pool):
 
     return revs[0]
 
+def excepthook(*args, **kwargs):
+    threading.__excepthook__(*args, **kwargs)
+    # Not sure exactly why sys.exit doesn't work here. This is cargo-culted from:
+    # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
+    os._exit(1)
+
 def dissect(args):
+    # Fix Python's threading system so that when a thread has an unhandled
+    # exception the program exits.
+    threading.excepthook = excepthook
+
     try:
         run_cmd(["git", "bisect", "log"])
     except CalledProcessError:
