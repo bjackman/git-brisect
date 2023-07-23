@@ -45,18 +45,28 @@ def rev_list(include: list[str], exclude: list[str], extra_args=[]) -> list[str]
 
 
 class WorkerPool:
-    # It's not safe to call this class' methods concurrently.
-
-    # Note: someone who knows more about Python and the GIL might be able to
-    # determine that some or all of the locking in this class is pointless.
+    # Note that there really shouldn't be any need for multi-threading here, we
+    # ought to just have a single thread and a bunch of subprocesses that
+    # directly run the user's test script. The problem is Python doesn't provide
+    # a portable way to select on a set of concurrent subproccesses. Also, why
+    # this condition variable quadrille for the inter-thread communication,
+    # can't we just do this like we would in Go? Yeah I dunno. queue.Queue
+    # doesn't seem to have an equivalent to closing a Go channel so you need
+    # some out-of-band "done" signal and at that point it seems cleaner to just
+    # roll a custom mechanism from scratch.
 
     def __init__(self, test_cmd, workdirs):
+        # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._rev_q = []
+        # Separate mechanism for reporting results back. Keeping this separate
+        # means that the only ones .wait()ing on self._cond are the worker
+        # threads, so that it's safe for enqueue to use .notify instead of
+        # notify_all.
         self._result_q = queue.Queue()
         self._threads = []
         self._subprocesses = {}
-        self._canceled = set()
+        self._dequeued = set()
         self._done = False
         self._test_cmd = test_cmd
 
@@ -67,11 +77,11 @@ class WorkerPool:
             self._threads.append(t)
 
     def enqueue(self, rev):
-        if rev in self._canceled:
-            logger.info(f"Ignoring enqueue for canceled revision {rev}")
-            return
-
         with self._cond:
+            if rev in self._dequeued:
+                logger.info(f"Ignoring enqueue for already-dequeued revision {rev}")
+                return
+
             self._rev_q.append(rev)
             logger.info(f"Enqueued {rev}, new queue depth {len(self._rev_q)}")
             self._cond.notify()
@@ -81,7 +91,7 @@ class WorkerPool:
             if rev in self._subprocesses:
                 # TODO: Does this work on Windows?
                 self._subprocesses[rev].send_signal(signal.SIGINT)
-            self._canceled.add(rev)
+            self._dequeued.add(rev)
 
     def _work(self, workdir):
         while True:
@@ -96,9 +106,10 @@ class WorkerPool:
                 logger.info(f"Worker in {workdir} dequeued {rev}, " +
                             f"new queue depth {len(self._rev_q)}")
 
-                if rev in self._canceled:
-                    logger.info(f"Worker in {workdir} ignoring {rev}, already canceled")
+                if rev in self._dequeued:
+                    logger.info(f"Worker in {workdir} ignoring {rev}, already dequeued")
                     continue
+                self._dequeued.add(rev)
 
                 # TODO: Capture stdout and stderr somewhere useful.
                 run_cmd(["git", "-C", workdir, "checkout", rev])
@@ -118,10 +129,7 @@ class WorkerPool:
             self._result_q.put((rev, p.returncode))
 
     def wait(self):
-        while True:
-            rev, result = self._result_q.get()
-            if rev not in self._canceled:
-                return rev, result
+        return self._result_q.get()
 
     def interrupt_and_join(self):
         with self._cond:

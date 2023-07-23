@@ -18,6 +18,8 @@ class TestGitDissect(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
 
+        self.commit_counter = 0
+
         self.git("init")
 
     def git(self, *args):
@@ -30,17 +32,20 @@ class TestGitDissect(unittest.TestCase):
             raise
         return res.stdout.decode().strip()
 
-    def commit(self, msg="dummy commit message"):
+    def commit(self, msg=None):
+        if msg is None:
+            msg = f"commit {self.commit_counter}"
+            self.commit_counter += 1
         self.git("commit", "--allow-empty", "-m", msg)
         return self.git("rev-parse", "HEAD")
 
-    def write_script(self, path, fail):
+    def write_script(self, fail):
         """Write a script to path that can be used to "test" a commit.
 
         If fail, the script will exit with an error code.
 
-        The script writes to a file so that script_runs can detect when it
-        gets run.
+        The script writes to a file in the current CWD (not the CWD the script
+        runs in) that script_runs can use to detect when it gets run.
 
         This also git adds the script.
         """
@@ -48,15 +53,15 @@ class TestGitDissect(unittest.TestCase):
         if fail:
             content += "; exit 1"
 
-        with open(path, "w") as f:
+        with open("run.sh", "w") as f:
             f.write(content)
-        os.chmod(path, 0o777)
+        os.chmod("run.sh", 0o777)
 
-        self.git("add", path)
+        self.git("add", "run.sh")
 
-    def script_runs(self, path):
+    def script_runs(self):
         """Return each of the commits tested by the script from write_script."""
-        if not os.path.exists(path):
+        if not os.path.exists("output.txt"):
             return []
         with open("output.txt") as f:
             return [l.strip() for l in f.readlines()]
@@ -67,9 +72,9 @@ class TestGitDissect(unittest.TestCase):
 
     def test_no_tests_needed(self):
         # TODO: Actually we should check that the script doesn't get run.
-        self.write_script("run.sh", fail=False)
+        self.write_script(fail=False)
         good = self.commit()
-        self.write_script("run.sh", fail=True)
+        self.write_script(fail=True)
         bad = self.commit()
 
         self.git("bisect", "start")
@@ -81,10 +86,10 @@ class TestGitDissect(unittest.TestCase):
 
     def test_smoke(self):
         # Linear history where the code gets broken in the middle.
-        self.write_script("run.sh", fail=False)
+        self.write_script(fail=False)
         good = self.commit()
         want_test1 = self.commit()
-        self.write_script("run.sh", fail=True)
+        self.write_script(fail=True)
         want_culprit = self.commit()
         bad = self.commit()
 
@@ -93,20 +98,20 @@ class TestGitDissect(unittest.TestCase):
         self.git("biset", "bad", bad)
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want_culprit)
-        self.assertCountEqual(
-            self.script_runs("run.sh"),
-            [want_test1, want_culprit],
-            "didn't get the expected set of script runs")
+        self.assertCountEqual(self.script_runs(),
+                              [want_test1, want_culprit],
+                              "didn't get the expected set of script runs")
 
     def test_nonlinear_multiple_good(self):
-        # Linear history where the code is good in both branches and then broken after a merge
-        self.write_script("run.sh", fail=False)
+        # Branched history where the code is good in both branches and then broken after a merge
+        self.write_script(fail=False)
         base = self.commit()
         good1 = self.commit()
         self.git("checkout", base)
         good2 = self.commit()
-        self.git("merge", good2)
-        self.write_script("run.sh", fail=True)
+        self.git("merge", "--no-edit", good1)
+        merge = self.git("rev-parse", "HEAD")
+        self.write_script(fail=True)
         want = self.commit()
         bad = self.commit()
 
@@ -116,12 +121,13 @@ class TestGitDissect(unittest.TestCase):
         self.git("bisect", "bad", bad)
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+        self.assertCountEqual(self.script_runs(), [merge, want],
+                              "didn't get expected set of script runs")
 
 
     # TODO: above case but it gets broke in one of the branches
 
     # TODO:
-    #  nonlinear, multiple good
     #  nonlinear, single good
     #  worktree mode (check run in expected dir)
     #  non-worktree mode
