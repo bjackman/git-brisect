@@ -113,7 +113,7 @@ class WorkerPool:
 
                 self._subprocesses[rev] = p
 
-            p.wait()
+            p.communicate()
             logger.info(f"Worker in {workdir} got result {p.returncode} for {rev}")
             self._result_q.put((rev, p.returncode))
 
