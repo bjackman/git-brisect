@@ -187,7 +187,7 @@ def dissect(args):
         return do_dissect(args, pool)
     finally:
         for w in worktrees:
-            run_cmd(["git", "worktree", "remove", w])
+            run_cmd(["git", "worktree", "remove", "--force", w])
         if pool:
             pool.interrupt_and_join()
 
