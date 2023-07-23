@@ -6,7 +6,7 @@
         {
             "label": "run tests",
             "type": "shell",
-            "command": "python3 -m unittest git_dissect_test",
+            "command": "python3 git_dissect_test.py",
             "problemMatcher": [],
             "group": {
                 "kind": "test",
