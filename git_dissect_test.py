@@ -80,6 +80,7 @@ class TestGitDissect(unittest.TestCase):
         self.git("bisect", "start")
         self.git("bisect", "good", good)
         self.git("bisect", "bad", bad)
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["run.sh"]), bad)
         self.assertFalse(os.path.exists("output.txt"), "Script was run unnecessarily")
@@ -95,7 +96,8 @@ class TestGitDissect(unittest.TestCase):
 
         self.git("bisect", "start")
         self.git("bisect", "good", good)
-        self.git("biset", "bad", bad)
+        self.git("bisect", "bad", bad)
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want_culprit)
         self.assertCountEqual(self.script_runs(),
@@ -119,6 +121,7 @@ class TestGitDissect(unittest.TestCase):
         self.git("bisect", "good", good1)
         self.git("bisect", "good", good2)
         self.git("bisect", "bad", bad)
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
         self.assertCountEqual(self.script_runs(), [merge, want],
