@@ -127,15 +127,45 @@ class TestGitDissect(unittest.TestCase):
         self.assertCountEqual(self.script_runs(), [merge, want],
                               "didn't get expected set of script runs")
 
+    def test_bug_in_branch(self):
+        # Branched history where the bug arises in one of the branches.
+        self.write_script(fail=False)
+        good = self.commit()
+        optional = self.commit()
+        self.git("checkout", good)
+        self.write_script(fail=True)
+        want = self.commit()
+        test_me = []
+        test_me.append(self.commit())
+        self.git("checkout", optional)
+        self.git("merge", "--no-edit", test_me[0])
+        test_me.append(self.git("rev-parse", "HEAD"))
+        bad = self.commit()
+
+        self.git("bisect", "start")
+        self.git("bisect", "good", good)
+        self.git("bisect", "bad", bad)
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
+
+        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+        # All we do is find the first commit in the bisection range where things
+        # went from good to bad (this is just how git-bisect works). So if we
+        # find that commit before testing the commit in the other branch, we can
+        # abort testing the other branch. Therefore it's optional.
+        runs = self.script_runs()
+        if optional in runs:
+            runs.remove(optional)
+        self.logger.info("want: " + want)
+        self.logger.info(f"test_me: {test_me}")
+        self.assertCountEqual(runs, [want] + test_me,
+                              "didn't get expected set of script runs")
 
     # TODO: above case but it gets broke in one of the branches
 
     # TODO:
-    #  nonlinear, single good
     #  worktree mode (check run in expected dir)
     #  non-worktree mode
     #  replacing args
-    #  ensuring script isn't run more times than necessary
     #  ensuring test cleanups happen
     #  gathering output
     #  bisect should get reset afterwardsj
