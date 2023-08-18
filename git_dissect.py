@@ -62,7 +62,7 @@ class WorkerPool:
 
     # TODO: create worktrees lazily -> support unlimited parallelism.
 
-    def __init__(self, test_cmd, workdirs, cleanup):
+    def __init__(self, test_cmd, workdirs, cleanup_worktrees):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._rev_q = []
@@ -76,7 +76,7 @@ class WorkerPool:
         self._dequeued = set()
         self._done = False
         self._test_cmd = test_cmd
-        self._cleanup_worktrees = cleanup
+        self._cleanup_worktrees = cleanup_worktrees
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -200,7 +200,7 @@ def in_bisect() -> bool:
     else:
         return True
 
-def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
+def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     if not in_bisect():
         raise NotBisectingError("Couldn't run 'git bisect log' - did you run 'git bisect'?")
 
@@ -217,7 +217,7 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(args,
                           worktrees or [os.getcwd() for _ in range(num_threads)],
-                          cleanup=cleanup)
+                          cleanup_worktrees=cleanup_worktrees)
         return do_dissect(args, pool)
     finally:
         if pool:
@@ -287,7 +287,7 @@ if __name__ == "__main__":
         result = dissect(args.cmd,
                         num_threads=args.num_threads,
                         use_worktrees=not args.no_worktrees,
-                        cleanup=(not args.no_worktrees and
+                        cleanup_worktrees=(not args.no_worktrees and
                                 not args.no_cleanup_worktrees))
     finally:
         if not was_in_bisect:
