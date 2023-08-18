@@ -8,6 +8,7 @@ git bisect good $GOOD
 git-dissect [--[no-]worktrees] $*
 """
 
+import argparse
 import dataclasses
 import logging
 import os
@@ -16,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import queue
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +57,9 @@ class WorkerPool:
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
 
-    def __init__(self, test_cmd, workdirs, cleanup_worktrees):
+    # TODO: create worktrees lazily -> support unlimited parallelism.
+
+    def __init__(self, test_cmd, workdirs, cleanup):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._rev_q = []
@@ -69,7 +73,7 @@ class WorkerPool:
         self._dequeued = set()
         self._done = False
         self._test_cmd = test_cmd
-        self._cleanup_worktrees = cleanup_worktrees
+        self._cleanup_worktrees = cleanup
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -185,13 +189,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
-    # TODO: create worktrees lazily -> support unlimited parallelism.
-
-    # Fix Python's threading system so that when a thread has an unhandled
-    # exception the program exits.
-    threading.excepthook = excepthook
-
+def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
     try:
         run_cmd(["git", "bisect", "log"])
     except CalledProcessError:
@@ -210,7 +208,7 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(args,
                           worktrees or [os.getcwd() for _ in range(num_threads)],
-                          cleanup_worktrees=cleanup_worktrees)
+                          cleanup=cleanup)
         return do_dissect(args, pool)
     finally:
         if pool:
@@ -219,7 +217,57 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
             run_cmd(["git", "worktree", "remove", "--force", w])
 
 if __name__ == "__main__":
-    print(run_cmd(["cat", "/etc/shadow"]))
+    # Fix Python's threading system so that when a thread has an unhandled
+    # exception the program exits.
+    threading.excepthook = excepthook
+
+    parser = argparse.ArgumentParser(
+        description="git bisect and rebase --exec, but with parallelism")
+    # TODO: add short args (not sure how to do this, no docs on the plane!)
+    def positive_int(val):
+        i = int(val)
+        if i < 0:
+            raise ValueError("value cannot be negative")
+        return i
+    # TODO: add short options (-n etc)
+    parser.add_argument(
+        "--num-threads", type=positive_int, default=8,
+        help=(
+            "Max parallelism. " +
+            " Note that increasing this incurs a startup cost if using worktrees."))
+    # TODO: make it a bool with a value instead of store_tree
+    parser.add_argument(
+        "--no-worktrees", action="store_true",
+        help=(
+            "By default, each thread runs the test in its own worktree. " +
+            "Set this to disable that, and just run parallel tests in the main git tree"))
+    # TODO: This cleanup logic is actually kinda stupid, probably would have
+    # been better to just leave it to the uesr to prefix their test command with
+    # a cleanup command if they care about it.
+    parser.add_argument(
+        "--no-cleanup-worktrees", action="store_true",
+        help=(
+            "By default, worktrees are hard-cleaned with git clean -fdx after each test." +
+            "Set this to disable that. Ignored if --no-worktrees"))
+    parser.add_argument("cmd", nargs="+")
+    args = parser.parse_args()
+
+    try:
+        result = dissect(args.cmd,
+                        num_threads=args.num_threads,
+                        use_worktrees=not args.no_worktrees,
+                        cleanup=(not args.no_worktrees and
+                                not args.no_cleanup_worktrees))
+    except NotBisectingError:
+        print("No bisection in progress. First run these commands:")
+        print("  git bisect start")
+        print("  git bisect good <known good commit>")
+        print("  git bisect bad <known bad commit>")
+        print("Then try again.")
+        sys.exit(1)
+
+    print("First bad commit is " + result)
+
 
 # TODO
 #  replacing args? Original idea was to have placeholders like with find
