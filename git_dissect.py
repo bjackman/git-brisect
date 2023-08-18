@@ -36,9 +36,11 @@ def run_cmd(args: list[str]) -> str:
             f'Stderr:\n{result.stderr.decode()}')
     return result.stdout.decode()
 
+def all_refs() -> list[str]:
+    return (l.split(" ")[1] for l in run_cmd(["git", "show-ref"]).splitlines())
+
 def good_refs() -> list[str]:
-    all_refs = (l.split(" ")[1] for l in run_cmd(["git", "show-ref"]).splitlines())
-    return [r for r in all_refs if r.startswith("refs/bisect/good")]
+    return [r for r in all_refs() if r.startswith("refs/bisect/good")]
 
 def rev_list(include: list[str], exclude: list[str], extra_args=[]) -> list[str]:
     args =  ["git", "rev-list"] + include + ["^" + r for r in exclude]
@@ -189,10 +191,16 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
+def in_bisect() -> bool:
     try:
         run_cmd(["git", "bisect", "log"])
     except CalledProcessError:
+        return False
+    else:
+        return True
+
+def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
+    if not in_bisect():
         raise NotBisectingError("Couldn't run 'git bisect log' - did you run 'git bisect'?")
 
     tmpdir = tempfile.mkdtemp()
@@ -216,11 +224,7 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
         for w in worktrees:
             run_cmd(["git", "worktree", "remove", "--force", w])
 
-if __name__ == "__main__":
-    # Fix Python's threading system so that when a thread has an unhandled
-    # exception the program exits.
-    threading.excepthook = excepthook
-
+def parse_args():
     parser = argparse.ArgumentParser(
         description="git bisect and rebase --exec, but with parallelism")
     # TODO: add short args (not sure how to do this, no docs on the plane!)
@@ -250,26 +254,50 @@ if __name__ == "__main__":
             "By default, worktrees are hard-cleaned with git clean -fdx after each test." +
             "Set this to disable that. Ignored if --no-worktrees"))
     parser.add_argument("cmd", nargs="+")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--start", metavar="start", type=str, help=(
+            "Start of bisection. If not provided, this tool assumes you've separately " +
+            "begun a bisection and set this via 'git bisect good'"))
+    parser.add_argument(
+        "--end", type=str, help=(
+            "Start of bisection. If not provided, either set this separately via " +
+            "'git bisect bad', or this tool will use HEAD"))
 
+    return parser.parse_args()
+
+if __name__ == "__main__":
+    # Fix Python's threading system so that when a thread has an unhandled
+    # exception the program exits.
+    threading.excepthook = excepthook
+
+    args = parse_args()
+    was_in_bisect = in_bisect()
     try:
+        if not was_in_bisect:
+            run_cmd(["git", "bisect", "start"])
+        if args.start:
+            run_cmd(["git", "bisect", "good", args.start])
+        if args.end:
+            run_cmd(["git", "bisect", "bad", args.to])
+        if "refs/bisect/bad" not in all_refs():
+            run_cmd(["git", "bisect", "bad"])
         result = dissect(args.cmd,
                         num_threads=args.num_threads,
                         use_worktrees=not args.no_worktrees,
                         cleanup=(not args.no_worktrees and
                                 not args.no_cleanup_worktrees))
-    except NotBisectingError:
-        print("No bisection in progress. First run these commands:")
-        print("  git bisect start")
-        print("  git bisect good <known good commit>")
-        print("  git bisect bad <known bad commit>")
-        print("Then try again.")
-        sys.exit(1)
+    finally:
+        if not was_in_bisect:
+            run_cmd(["git", "bisect", "reset"])
 
     print("First bad commit is " + result)
 
 
 # TODO
+#
+# See if it's possible to bisect in a worktree, so that the main tree can
+#  be used meanwhile by the user.
+
 #  replacing args? Original idea was to have placeholders like with find
 #  --exec. But can't remember why I thought this was useful.
 #
