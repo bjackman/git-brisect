@@ -55,7 +55,7 @@ class WorkerPool:
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
 
-    def __init__(self, test_cmd, workdirs):
+    def __init__(self, test_cmd, workdirs, cleanup_worktrees):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._rev_q = []
@@ -69,6 +69,7 @@ class WorkerPool:
         self._dequeued = set()
         self._done = False
         self._test_cmd = test_cmd
+        self._cleanup_worktrees = cleanup_worktrees
 
         # TODO: there's a bug leading to the same workdir getting reused by multiple threads.
         for workdir in workdirs:
@@ -113,6 +114,8 @@ class WorkerPool:
 
                 # TODO: Capture stdout and stderr somewhere useful.
                 run_cmd(["git", "-C", workdir, "checkout", rev])
+                if self._cleanup_worktrees:
+                    run_cmd(["git", "-C", workdir, "clean", "-fdx"])
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -183,7 +186,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(args):
+def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     # Fix Python's threading system so that when a thread has an unhandled
     # exception the program exits.
     threading.excepthook = excepthook
@@ -193,15 +196,21 @@ def dissect(args):
     except CalledProcessError:
         raise NotBisectingError("Couldn't run 'git bisect log' - did you run 'git bisect'?")
 
-    num_threads = 8 # TODO
     tmpdir = tempfile.mkdtemp()
-    worktrees = [os.path.join(tmpdir, f"worktree-{i}") for i in range(num_threads)]
+
+    if use_worktrees:
+        worktrees = [os.path.join(tmpdir, f"worktree-{i}") for i in range(num_threads)]
+    else:
+        worktrees = []
+
     pool = None
     try:
         # TODO: add option to skip worktrees
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
-        pool = WorkerPool(args, worktrees)
+        pool = WorkerPool(args,
+                          worktrees or [os.getcwd() for _ in range(num_threads)],
+                          cleanup_worktrees=cleanup_worktrees)
         return do_dissect(args, pool)
     finally:
         if pool:

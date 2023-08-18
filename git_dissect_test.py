@@ -166,13 +166,30 @@ class TestGitDissect(unittest.TestCase):
         self.assertCountEqual(runs, [want] + test_me,
                               "didn't get expected set of script runs")
 
-    def test_worktree_mode(self):
-        # Drop a script that writes its CWD to a logfile in our _current_ CWD.
-        self.write_executable("log_cwd.sh", f"pwd >> {os.getcwd()}/cwds.txt")
+    def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
+        """Run a test that should result in multiple worktrees being used.
+
+        (Unless use_worktrees is false). The test script records what CWD it was
+        run in, and leaves a file behind. It also records whether it found that
+        file left over in the CWD from a previous run. Returns a list of pairs
+        of (CWD, dirty), where "dirty" actually just means that the specific
+        file was left behind.
+
+        Does its best to ensure that at least one worktree gets reused, by
+        having much more commits than threads. In theory this might actually
+        flake though, if by chance the bisection algorithm lands on testing the
+        exact 2 commits on either side of the breakage before any others.
+        """
+        script = f"""
+            [ -e ./dirty ]; dirty_status=$?
+            echo $(pwd) "$dirty_status" >> {os.getcwd()}/cwds.txt
+            touch ./dirty
+        """
+        self.write_executable("log_cwd.sh", script)
 
         self.write_pass_fail_script(fail=False)
         init = self.commit("init")
-        for i in range(10):
+        for i in range(50):
             self.commit("good " + str(i))
         self.write_pass_fail_script(fail=True)
         end = self.commit("end")
@@ -182,27 +199,55 @@ class TestGitDissect(unittest.TestCase):
         self.git("bisect", "bad", end)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        git_dissect.dissect(["sh", "./log_cwd.sh", "./run.sh"])
+        git_dissect.dissect(["sh", "./log_cwd.sh", "./run.sh"],
+                            use_worktrees=use_worktrees, cleanup_worktrees=cleanup_worktrees,
+                            num_threads=4)
         runs = self.script_runs()
 
-        cwds = self.read_stripped_lines("cwds.txt")
+        lines = self.read_stripped_lines("cwds.txt")
         # It's possible in theory that all but one of the threads was very slow,
         # and a single thread ended up doing all the work. And maybe by chance
         # it happened to test exactly the commits it needed, so we might just
         # get the same cwd twice. Seems unlikely so we don't bother to try and
         # avoid any case like this even though it might reduce test coverage.
-        self.assertGreaterEqual(len(cwds), 2)
-        for cwd in cwds:
+        self.assertGreaterEqual(len(lines), 2)
+        ret = []
+        for line in lines:
+            cwd, dirty_status = line.split(" ")
+            self.assertIn(dirty_status, ("0", "1"))
+            ret.append((cwd, dirty_status == "0"))
+        return ret
+
+    def test_worktree_mode(self):
+        for (cwd, dirty) in self._run_worktree_test(use_worktrees=True,
+                                                    cleanup_worktrees=True):
             self.assertNotEqual(cwd, os.getcwd())
             # This is not actually required, any directory is fine, just a hack
             # assertion to try and catch scripts getting run in totally random
             # trees.
             self.assertNotEqual(cwd.find("worktree-"), -1)
+            self.assertFalse(dirty)
+
+    def test_worktree_mode_no_cleanup(self):
+        results = self._run_worktree_test(use_worktrees=True,
+                                          cleanup_worktrees=False)
+        # If this flakes, it might be that by chance no worktree got reused,
+        # which isn't technically a bug. Try to find a way to force them to get
+        # reused.
+        self.assertTrue(any(dirty for (cwd, dirty) in results))
+
+    def test_non_worktree_mode(self):
+        results = self._run_worktree_test(use_worktrees=False)
+
+        # If nobody saw a dirty tree, seems like there was more parallelism than
+        # expected, or we were racily cleaning up the tree.
+        self.assertTrue(any(dirty for (cwd, dirty) in results))
+        self.assertTrue(all(cwd == os.getcwd() for (cwd, dirty) in results))
+
+
 
     # TODO:
     #  test num_threads
-    #  worktree mode (check run in expected dir)
-    #  non-worktree mode
     #  replacing args
     #  ensuring script isn't run more times than necessary
     #  ensuring test cleanups happen
