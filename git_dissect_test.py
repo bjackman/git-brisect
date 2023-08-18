@@ -138,7 +138,7 @@ class TestGitDissect(unittest.TestCase):
         test_me = []
         test_me.append(self.commit())
         self.git("checkout", optional)
-        self.git("merge", "--no-edit", test_me[0])
+        self.git("merge", "--no-edit", want)
         test_me.append(self.git("rev-parse", "HEAD"))
         bad = self.commit()
 
@@ -156,16 +156,17 @@ class TestGitDissect(unittest.TestCase):
         if optional in runs:
             runs.remove(optional)
         self.logger.info("want: " + want)
-        self.logger.info(f"test_me: {test_me}")
         self.assertCountEqual(runs, [want] + test_me,
                               "didn't get expected set of script runs")
 
     # TODO: above case but it gets broke in one of the branches
 
     # TODO:
+    #  nonlinear, single good
     #  worktree mode (check run in expected dir)
     #  non-worktree mode
     #  replacing args
+    #  ensuring script isn't run more times than necessary
     #  ensuring test cleanups happen
     #  gathering output
     #  bisect should get reset afterwardsj
