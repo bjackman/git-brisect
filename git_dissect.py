@@ -204,10 +204,10 @@ def dissect(args):
         pool = WorkerPool(args, worktrees)
         return do_dissect(args, pool)
     finally:
-        for w in worktrees:
-            run_cmd(["git", "worktree", "remove", "--force", w])
         if pool:
             pool.interrupt_and_join()
+        for w in worktrees:
+            run_cmd(["git", "worktree", "remove", "--force", w])
 
 if __name__ == "__main__":
     print(run_cmd(["cat", "/etc/shadow"]))
