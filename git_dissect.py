@@ -71,7 +71,6 @@ class WorkerPool:
         self._test_cmd = test_cmd
         self._cleanup_worktrees = cleanup_worktrees
 
-        # TODO: there's a bug leading to the same workdir getting reused by multiple threads.
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
             t.start()
@@ -207,7 +206,6 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
 
     pool = None
     try:
-        # TODO: add option to skip worktrees
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(args,
@@ -224,5 +222,9 @@ if __name__ == "__main__":
     print(run_cmd(["cat", "/etc/shadow"]))
 
 # TODO
+#  replacing args? Original idea was to have placeholders like with find
+#  --exec. But can't remember why I thought this was useful.
+#
 #   capture output
+#
 #   option to test based on tree? Worth checking if reverts result in the same tree.

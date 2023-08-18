@@ -320,12 +320,17 @@ class TestGitDissect(unittest.TestCase):
         self._test_thread_limit(4)
 
     # TODO:
-    #  replacing args
-    #  ensuring script isn't run more times than necessary
+    #
+    #  pathological args? Like good and bad aren't ancestors?
+    #
+    #  ensuring script isn't run more times than necessary? Maybe done
+    #
     #  ensuring test cleanups happen
+    #
     #  gathering output
-    #  bisect should get reset afterwardsj
+    #
     #  cancelation of tests that turn out to be unnecessary
+    #
     #  ensure things don't break under long enqueuements
 
 
