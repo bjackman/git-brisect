@@ -137,10 +137,10 @@ class TestGitDissect(unittest.TestCase):
         self.git("checkout", good)
         self.write_script(fail=True)
         want = self.commit()
-        test_me = []
-        test_me.append(self.commit())
+        also_test = self.commit()
+        test_me = [also_test]
         self.git("checkout", optional)
-        self.git("merge", "--no-edit", want)
+        self.git("merge", "--no-edit", also_test)
         test_me.append(self.git("rev-parse", "HEAD"))
         bad = self.commit()
 
