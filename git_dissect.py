@@ -153,6 +153,10 @@ def do_dissect(args, pool):
     while True:
         # --revlist-all: Get hashes for bisection in order of precedence.
         # Returns bad as last entry
+        #
+        # TODO: this is broken! --bisect-all is
+        # getting ignored. I think the tests are only pasing because we don't
+        # have anything to assert that we do a minimal set of tests.
         revs = rev_list(include=["refs/bisect/bad"], exclude=good_refs(), extra_args="--bisect-all")
         if not revs:
             raise RuntimeError("Bug: found no revisions in bisect range")
