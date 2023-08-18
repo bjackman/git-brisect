@@ -157,11 +157,8 @@ class TestGitDissect(unittest.TestCase):
         runs = self.script_runs()
         if optional in runs:
             runs.remove(optional)
-        self.logger.info("want: " + want)
         self.assertCountEqual(runs, [want] + test_me,
                               "didn't get expected set of script runs")
-
-    # TODO: above case but it gets broke in one of the branches
 
     # TODO:
     #  nonlinear, single good
