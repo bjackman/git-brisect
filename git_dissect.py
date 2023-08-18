@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import threading
 import queue
+import shutil
 import sys
 
 logger = logging.getLogger(__name__)
@@ -203,9 +204,9 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
     if not in_bisect():
         raise NotBisectingError("Couldn't run 'git bisect log' - did you run 'git bisect'?")
 
-    tmpdir = tempfile.mkdtemp()
-
+    tmpdir = None
     if use_worktrees:
+        tmpdir = tempfile.mkdtemp()
         worktrees = [os.path.join(tmpdir, f"worktree-{i}") for i in range(num_threads)]
     else:
         worktrees = []
@@ -223,6 +224,8 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup=False):
             pool.interrupt_and_join()
         for w in worktrees:
             run_cmd(["git", "worktree", "remove", "--force", w])
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir)
 
 def parse_args():
     parser = argparse.ArgumentParser(
