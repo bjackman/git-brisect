@@ -231,6 +231,50 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
+@dataclasses.dataclass
+class Range:
+    start: str
+    end: str
+    broken: bool
+
+def do_test_every_commit(pool, commits):
+    for commit in commits:
+        pool.enqueue(commit)
+
+    results = []
+    for _ in range(len(commits)):
+        results.append(pool.wait())
+
+    return results
+
+# include and exclude specify the set of commits to test.
+def test_every_commit(args, include: list[str], exclude: list[str],
+                      num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+    commits = rev_list(include=include, exclude=exclude)
+
+    tmpdir = None
+    if use_worktrees:
+        tmpdir = tempfile.mkdtemp()
+        worktrees = [os.path.join(tmpdir, f"worktree-{i}") for i in range(num_threads)]
+    else:
+        worktrees = []
+
+    pool = None
+    try:
+        for w in worktrees:
+            run_cmd(["git", "worktree", "add", w, "HEAD"])
+        pool = WorkerPool(args,
+                          worktrees or [os.getcwd() for _ in range(num_threads)],
+                          cleanup_worktrees=cleanup_worktrees)
+        return do_test_every_commit(pool, commits)
+    finally:
+        if pool:
+            pool.interrupt_and_join()
+        for w in worktrees:
+            run_cmd(["git", "worktree", "remove", "--force", w])
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir)
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="git bisect and rebase --exec, but with parallelism")
@@ -269,6 +313,9 @@ def parse_args():
         "--end", type=str, help=(
             "Start of bisection. If not provided, either set this separately via " +
             "'git bisect bad', or this tool will use HEAD"))
+    parser.add_argument(
+        "--test-every-commit", action="store_true",
+        help="Instead of bissecting, just test every commit and report every result.")
 
     return parser.parse_args()
 
@@ -279,25 +326,41 @@ if __name__ == "__main__":
 
     args = parse_args()
     was_in_bisect = in_bisect()
-    try:
-        if not was_in_bisect:
-            run_cmd(["git", "bisect", "start"])
-        if args.start:
-            run_cmd(["git", "bisect", "good", args.start])
-        if args.end:
-            run_cmd(["git", "bisect", "bad", args.to])
-        if "refs/bisect/bad" not in all_refs():
-            run_cmd(["git", "bisect", "bad"])
-        result = dissect(args.cmd,
-                        num_threads=args.num_threads,
-                        use_worktrees=not args.no_worktrees,
-                        cleanup_worktrees=(not args.no_worktrees and
-                                not args.no_cleanup_worktrees))
-    finally:
-        if not was_in_bisect:
-            run_cmd(["git", "bisect", "reset"])
+    if args.test_every_commit:
+        if not args.start:
+            print("--start is required with --test-every-commit")
+            sys.exit(1)
 
-    print("First bad commit is " + result)
+        # TODO: Cleanup the way we specify the range to test, more like git rev-list.
+        results = test_every_commit(
+            args.cmd, include=[args.end or "HEAD"], exclude=[args.start + "^"],
+            num_threads=args.num_threads,
+            use_worktrees=not args.no_worktrees,
+            cleanup_worktrees=(not args.no_worktrees and
+                    not args.no_cleanup_worktrees))
+        # TODO: Print these as a range summary, or more like in a commit graph at least
+        for commit, exit_code in results:
+            print(commit + ": exit code was " + str(exit_code))
+    else:
+        try:
+            if not was_in_bisect:
+                run_cmd(["git", "bisect", "start"])
+            if args.start:
+                run_cmd(["git", "bisect", "good", args.start])
+            if args.end:
+                run_cmd(["git", "bisect", "bad", args.to])
+            if "refs/bisect/bad" not in all_refs():
+                run_cmd(["git", "bisect", "bad"])
+            result = dissect(args.cmd,
+                            num_threads=args.num_threads,
+                            use_worktrees=not args.no_worktrees,
+                            cleanup_worktrees=(not args.no_worktrees and
+                                    not args.no_cleanup_worktrees))
+            print("First bad commit is " + result)
+        finally:
+            if not was_in_bisect:
+                run_cmd(["git", "bisect", "reset"])
+
 
 
 # TODO

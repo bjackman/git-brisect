@@ -12,7 +12,7 @@ import threading
 
 import git_dissect
 
-class TestGitDissect(unittest.TestCase):
+class GitDissectTest(unittest.TestCase):
     def setUp(self):
         self.logger = logging.getLogger(self.id())
 
@@ -76,6 +76,7 @@ class TestGitDissect(unittest.TestCase):
             return []
         return self.read_stripped_lines("output.txt")
 
+class TestBisection(GitDissectTest):
     def test_not_bisect(self):
         with self.assertRaises(git_dissect.NotBisectingError):
             git_dissect.dissect([])
@@ -332,6 +333,31 @@ class TestGitDissect(unittest.TestCase):
     #  cancelation of tests that turn out to be unnecessary
     #
     #  ensure things don't break under long enqueuements
+
+class TestTestEveryCommit(GitDissectTest):
+    def test_smoke(self):
+        self.write_pass_fail_script(fail=False)
+        commits = []
+        commits.append(self.commit())
+        commits.append(self.commit())
+        commits.append(self.commit())
+        self.write_pass_fail_script(fail=True)
+        commits.append(self.commit())
+        commits.append(self.commit())
+        commits.append(self.commit())
+        self.write_pass_fail_script(fail=False)
+        commits.append(self.commit())
+
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
+
+        results = git_dissect.test_every_commit(
+            ["sh", "./run.sh"],
+            exclude=[commits[0]], include=[commits[-1]])
+        want = list(reversed(list(zip(commits[1:], [
+            0, 0, 1, 1, 1, 0
+        ]))))
+
+        self.assertEqual(results, want)
 
 
 if __name__ == "__main__":
