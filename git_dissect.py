@@ -187,6 +187,8 @@ def excepthook(*args, **kwargs):
     os._exit(1)
 
 def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+    # TODO: create worktrees lazily -> support unlimited parallelism.
+
     # Fix Python's threading system so that when a thread has an unhandled
     # exception the program exits.
     threading.excepthook = excepthook

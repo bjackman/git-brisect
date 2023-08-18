@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import threading
 
 import git_dissect
 
@@ -244,10 +246,80 @@ class TestGitDissect(unittest.TestCase):
         self.assertTrue(any(dirty for (cwd, dirty) in results))
         self.assertTrue(all(cwd == os.getcwd() for (cwd, dirty) in results))
 
+    def _test_thread_limit(self, num_threads):
+        # At each commit will be a script that starts, touches a unique file
+        # path, then hangs until a different unique filepath appers, then exits.
+        commits = []
+        for i in range(20):
+            script = f"""
+                touch {os.getcwd()}/started-{i}
+                while ! [ -e {os.getcwd()}/stop-{i} ]; do
+                    sleep 0.01
+                done
+                touch {os.getcwd()}/done-{i}
+                exit {"1" if i > 17 else "0"}
+            """
+            self.write_executable("run.sh", script)
+            commits.append(self.commit())
 
+        # Run the dissection in the background
+        self.git("bisect", "start")
+        self.git("bisect", "good", commits[0])
+        self.git("bisect", "bad", commits[-1])
+        dissect_result = None
+        def run_dissect():
+            nonlocal dissect_result
+            dissect_result = git_dissect.dissect(args=["sh", "./run.sh"],
+                                         num_threads=num_threads)
+
+        thread = threading.Thread(target=run_dissect)
+        thread.start()
+
+        # Gets the indexes of the commits whose test scripts are currently
+        # started/done
+        def tests_in_state(state):
+            ret = set()
+            for i in range(len(commits)):
+                if os.path.exists(state + "-" + str(i)):
+                    ret.add(i)
+            return ret
+        def running_tests():
+            return tests_in_state("started") - tests_in_state("done")
+
+        # Free up one thread at a time. We will do this at most once for each
+        # remaining commit (i.e. excluding the ones whose tests are already
+        # running)
+        for i in range(len(commits) - num_threads):
+            # No choice really but to just sleep for some random time, we can
+            # detect when the expected tests get started, but we don't know when
+            # we can trust that it doesn't also start any unexpected tests.
+            time.sleep(0.5)
+
+            if not thread.is_alive():
+                break
+
+            running = running_tests()
+            self.assertEqual(len(tests_in_state("started")), i + num_threads)
+
+            # Let one of the threads exit
+            to_terminate = next(iter(running_tests()))
+            open("stop-" + str(to_terminate), "w").close()
+
+        # If this fails then dissect() must have crashed.
+        self.assertIsNotNone(dissect_result)
+
+        thread.join()
+
+    def test_no_parallelism(self):
+        self._test_thread_limit(1)
+
+    def test_limited_threads(self):
+        self._test_thread_limit(4)
+
+    def test_many_threads(self):
+        self._test_thread_limit(4)
 
     # TODO:
-    #  test num_threads
     #  replacing args
     #  ensuring script isn't run more times than necessary
     #  ensuring test cleanups happen
