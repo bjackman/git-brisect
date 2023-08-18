@@ -41,7 +41,15 @@ class TestGitDissect(unittest.TestCase):
         self.git("commit", "--allow-empty", "-m", msg)
         return self.git("rev-parse", "HEAD")
 
-    def write_script(self, fail):
+    def write_executable(self, path, content):
+        """Write an executable and git add it"""
+        with open(path, "w") as f:
+            f.write(content)
+        os.chmod(path, 0o777) # SIR yes SIR o7
+
+        self.git("add", path)
+
+    def write_pass_fail_script(self, fail):
         """Write a script to path that can be used to "test" a commit.
 
         If fail, the script will exit with an error code.
@@ -54,19 +62,17 @@ class TestGitDissect(unittest.TestCase):
         content = f"git rev-parse HEAD >> {os.getcwd()}/output.txt"
         if fail:
             content += "; exit 1"
+        self.write_executable("run.sh", content)
 
-        with open("run.sh", "w") as f:
-            f.write(content)
-        os.chmod("run.sh", 0o777)
-
-        self.git("add", "run.sh")
+    def read_stripped_lines(self, path):
+        with open(path) as f:
+            return [l.strip() for l in f.readlines()]
 
     def script_runs(self):
         """Return each of the commits tested by the script from write_script."""
         if not os.path.exists("output.txt"):
             return []
-        with open("output.txt") as f:
-            return [l.strip() for l in f.readlines()]
+        return self.read_stripped_lines("output.txt")
 
     def test_not_bisect(self):
         with self.assertRaises(git_dissect.NotBisectingError):
@@ -74,9 +80,9 @@ class TestGitDissect(unittest.TestCase):
 
     def test_no_tests_needed(self):
         # TODO: Actually we should check that the script doesn't get run.
-        self.write_script(fail=False)
+        self.write_pass_fail_script(fail=False)
         good = self.commit()
-        self.write_script(fail=True)
+        self.write_pass_fail_script(fail=True)
         bad = self.commit()
 
         self.git("bisect", "start")
@@ -89,10 +95,10 @@ class TestGitDissect(unittest.TestCase):
 
     def test_smoke(self):
         # Linear history where the code gets broken in the middle.
-        self.write_script(fail=False)
+        self.write_pass_fail_script(fail=False)
         good = self.commit()
         want_test1 = self.commit()
-        self.write_script(fail=True)
+        self.write_pass_fail_script(fail=True)
         want_culprit = self.commit()
         bad = self.commit()
 
@@ -108,14 +114,14 @@ class TestGitDissect(unittest.TestCase):
 
     def test_nonlinear_multiple_good(self):
         # Branched history where the code is good in both branches and then broken after a merge
-        self.write_script(fail=False)
+        self.write_pass_fail_script(fail=False)
         base = self.commit()
         good1 = self.commit()
         self.git("checkout", base)
         good2 = self.commit()
         self.git("merge", "--no-edit", good1)
         merge = self.git("rev-parse", "HEAD")
-        self.write_script(fail=True)
+        self.write_pass_fail_script(fail=True)
         want = self.commit()
         bad = self.commit()
 
@@ -131,11 +137,11 @@ class TestGitDissect(unittest.TestCase):
 
     def test_bug_in_branch(self):
         # Branched history where the bug arises in one of the branches.
-        self.write_script(fail=False)
+        self.write_pass_fail_script(fail=False)
         good = self.commit()
         optional = self.commit()
         self.git("checkout", good)
-        self.write_script(fail=True)
+        self.write_pass_fail_script(fail=True)
         want = self.commit()
         also_test = self.commit()
         test_me = [also_test]
@@ -160,8 +166,41 @@ class TestGitDissect(unittest.TestCase):
         self.assertCountEqual(runs, [want] + test_me,
                               "didn't get expected set of script runs")
 
+    def test_worktree_mode(self):
+        # Drop a script that writes its CWD to a logfile in our _current_ CWD.
+        self.write_executable("log_cwd.sh", f"pwd >> {os.getcwd()}/cwds.txt")
+
+        self.write_pass_fail_script(fail=False)
+        init = self.commit("init")
+        for i in range(10):
+            self.commit("good " + str(i))
+        self.write_pass_fail_script(fail=True)
+        end = self.commit("end")
+
+        self.git("bisect", "start")
+        self.git("bisect", "good", init)
+        self.git("bisect", "bad", end)
+        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
+
+        git_dissect.dissect(["sh", "./log_cwd.sh", "./run.sh"])
+        runs = self.script_runs()
+
+        cwds = self.read_stripped_lines("cwds.txt")
+        # It's possible in theory that all but one of the threads was very slow,
+        # and a single thread ended up doing all the work. And maybe by chance
+        # it happened to test exactly the commits it needed, so we might just
+        # get the same cwd twice. Seems unlikely so we don't bother to try and
+        # avoid any case like this even though it might reduce test coverage.
+        self.assertGreaterEqual(len(cwds), 2)
+        for cwd in cwds:
+            self.assertNotEqual(cwd, os.getcwd())
+            # This is not actually required, any directory is fine, just a hack
+            # assertion to try and catch scripts getting run in totally random
+            # trees.
+            self.assertNotEqual(cwd.find("worktree-"), -1)
+
     # TODO:
-    #  nonlinear, single good
+    #  test num_threads
     #  worktree mode (check run in expected dir)
     #  non-worktree mode
     #  replacing args
