@@ -81,6 +81,11 @@ class TestBisection(GitDissectTest):
         with self.assertRaises(git_dissect.NotBisectingError):
             git_dissect.dissect([])
 
+    def setup_bisect(self, good, bad):
+        self.git("bisect", "start")
+        self.git("bisect", "good", good)
+        self.git("bisect", "bad", bad)
+
     def test_no_tests_needed(self):
         # TODO: Actually we should check that the script doesn't get run.
         self.write_pass_fail_script(fail=False)
@@ -88,9 +93,7 @@ class TestBisection(GitDissectTest):
         self.write_pass_fail_script(fail=True)
         bad = self.commit()
 
-        self.git("bisect", "start")
-        self.git("bisect", "good", good)
-        self.git("bisect", "bad", bad)
+        self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["run.sh"]), bad)
@@ -105,9 +108,7 @@ class TestBisection(GitDissectTest):
         want_culprit = self.commit()
         bad = self.commit()
 
-        self.git("bisect", "start")
-        self.git("bisect", "good", good)
-        self.git("bisect", "bad", bad)
+        self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want_culprit)
@@ -153,9 +154,7 @@ class TestBisection(GitDissectTest):
         test_me.append(self.git("rev-parse", "HEAD"))
         bad = self.commit()
 
-        self.git("bisect", "start")
-        self.git("bisect", "good", good)
-        self.git("bisect", "bad", bad)
+        self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
@@ -197,9 +196,7 @@ class TestBisection(GitDissectTest):
         self.write_pass_fail_script(fail=True)
         end = self.commit("end")
 
-        self.git("bisect", "start")
-        self.git("bisect", "good", init)
-        self.git("bisect", "bad", end)
+        self.setup_bisect(init, end)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         git_dissect.dissect(["sh", "./log_cwd.sh", "./run.sh"],
@@ -264,9 +261,7 @@ class TestBisection(GitDissectTest):
             commits.append(self.commit())
 
         # Run the dissection in the background
-        self.git("bisect", "start")
-        self.git("bisect", "good", commits[0])
-        self.git("bisect", "bad", commits[-1])
+        self.setup_bisect(commits[0], commits[-1])
         dissect_result = None
         def run_dissect():
             nonlocal dissect_result
