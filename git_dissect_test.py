@@ -22,6 +22,8 @@ class TestGitDissect(unittest.TestCase):
 
         self.git("init")
 
+    # Why does the test have a different style git wrapper function than the
+    # main code? It just does, OK! Stop asking annoying questions!
     def git(self, *args):
         res = subprocess.run(("git",) + args, capture_output=True)
         try:
