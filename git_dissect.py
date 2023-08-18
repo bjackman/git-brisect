@@ -44,7 +44,7 @@ def good_refs() -> list[str]:
     return [r for r in all_refs() if r.startswith("refs/bisect/good")]
 
 def rev_list(include: list[str], exclude: list[str], extra_args=[]) -> list[str]:
-    args =  ["git", "rev-list"] + include + ["^" + r for r in exclude]
+    args =  ["git", "rev-list"] + include + ["^" + r for r in exclude] + extra_args
     out = run_cmd(args)
     return [l.split(" ")[0] for l in out.splitlines()]
 
@@ -149,24 +149,41 @@ class WorkerPool:
         for t in self._threads:
             t.join()
 
+@dataclasses.dataclass
+class RevRange:
+    exclude: list[str]
+    # Git bisect always has one "include" i.e. the single good ref. I don't
+    # really know why there is 1 good ref but N bad ones. But we just follow
+    # git's lead.
+    include: str
+
+def bisect_gen():
+    """Generator for commits in the order we should test them"""
+    # This is a breadth-first sinary search. Nodes are revision ranges. There's
+    # an edge from each node to two sub-ranges, one for the commits before its
+    # midpoint and one to the commits afterwards.
+    ranges = [RevRange(exclude=good_refs(), include="refs/bisect/bad")]
+    while ranges:
+        r = ranges.pop(0)
+        by_distance = rev_list(exclude=r.exclude, include=[r.include],
+                               extra_args=["--bisect-all"])
+        if len(by_distance) == 0:
+            continue # Range is empty, we reached a leaf in our search
+        midpoint = by_distance[0]
+        # Add edge for range before the midpoint
+        ranges.append(RevRange(exclude=r.exclude, include=midpoint + "^"))
+        # And for range after.
+        ranges.append(RevRange(exclude=r.exclude + [midpoint], include=r.include))
+
 def do_dissect(args, pool):
     while True:
-        # --revlist-all: Get hashes for bisection in order of precedence.
-        # Returns bad as last entry
-        #
-        # TODO: this is broken! --bisect-all is
-        # getting ignored. I think the tests are only pasing because we don't
-        # have anything to assert that we do a minimal set of tests.
-        revs = rev_list(include=["refs/bisect/bad"], exclude=good_refs(), extra_args="--bisect-all")
-        if not revs:
-            raise RuntimeError("Bug: found no revisions in bisect range")
-        if len(revs) == 1:
-            logger.info(f"Found single revision {revs[0]}, done")
-            return revs[0]
-
-        logger.info(f"Found {len(revs) - 1} remaining revisions to test")
-
-        for rev in revs[1:]: # Drop "bad" commit
+        gen = bisect_gen()
+        while not pool.full():
+            try:
+                rev = next(gen)
+            except StopIteration:
+                # Nothing more to test, we must be done.
+                return run_cmd(["git", "rev-parse", "revs/bisect/bad"])
             pool.enqueue(rev)
 
         result_commit, returncode = pool.wait()
@@ -180,11 +197,6 @@ def do_dissect(args, pool):
             cancel_to = ["refs/bisect/bad"]
         logger.info("%s result was %d, cancelling %s to %s", result_commit, returncode,
                     cancel_from, cancel_to)
-
-        # TODO: Here we're iterating on the range of all possible cancelable
-        # commits; there might be a lot so it's probably faster (in the
-        # worst case) to instead iterate on the enqueued commits and check
-        # if each one is in the cancelable range.
         for commit in rev_list(include=cancel_to, exclude=cancel_from):
             pool.cancel(commit)
 
