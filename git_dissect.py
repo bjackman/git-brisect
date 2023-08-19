@@ -65,12 +65,8 @@ class WorkerPool:
     def __init__(self, test_cmd, workdirs, cleanup_worktrees):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
-        self._rev_q = []
-        # Separate mechanism for reporting results back. Keeping this separate
-        # means that the only ones .wait()ing on self._cond are the worker
-        # threads, so that it's safe for enqueue to use .notify instead of
-        # notify_all.
-        self._result_q = queue.Queue()
+        self._in_q = []
+        self._out_q = []
         self._threads = []
         self._subprocesses = {}
         self._dequeued = set()
@@ -89,9 +85,11 @@ class WorkerPool:
                 logger.info(f"Ignoring enqueue for already-dequeued revision {rev}")
                 return
 
-            self._rev_q.append(rev)
-            logger.info(f"Enqueued {rev}, new queue depth {len(self._rev_q)}")
-            self._cond.notify()
+            self._in_q.append(rev)
+            logger.info(f"Enqueued {rev}, new queue depth {len(self._in_q)}")
+            # TODO: Because we use the same condition variable for input and
+            # output, we need notify_all. Rework this to avoid that.
+            self._cond.notify_all()
 
     def cancel(self, rev):
         with self._cond:
@@ -103,15 +101,15 @@ class WorkerPool:
     def _work(self, workdir):
         while True:
             with self._cond:
-                while not self._rev_q and not self._done:
+                while not self._in_q and not self._done:
                     self._cond.wait()
                 if self._done:
                     return
 
-                rev = self._rev_q[0]
-                self._rev_q = self._rev_q[1:]
+                rev = self._in_q[0]
+                self._in_q = self._in_q[1:]
                 logger.info(f"Worker in {workdir} dequeued {rev}, " +
-                            f"new queue depth {len(self._rev_q)}")
+                            f"new queue depth {len(self._in_q)}")
 
                 if rev in self._dequeued:
                     logger.info(f"Worker in {workdir} ignoring {rev}, already dequeued")
@@ -128,17 +126,22 @@ class WorkerPool:
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 except (PermissionError, FileNotFoundError) as e:
                     logging.info(f"Error running at {rev} ({e}), returning code 1")
-                    self._result_q.put((rev, 1))
+                    self._out_q.append((rev, 1))
                     continue
 
                 self._subprocesses[rev] = p
 
             p.communicate()
             logger.info(f"Worker in {workdir} got result {p.returncode} for {rev}")
-            self._result_q.put((rev, p.returncode))
+            self._out_q.append((rev, p.returncode))
 
     def wait(self):
-        return self._result_q.get()
+        with self._cond:
+            while len(self._out_q) == 0:
+                self._cond.wait()
+            ret = self._out_q[0]
+            self._out_q = self._out_q[1:]
+            return ret
 
     def interrupt_and_join(self):
         with self._cond:
@@ -161,7 +164,40 @@ def bisect_gen():
     """Generator for commits in the order we should test them"""
     # This is a breadth-first sinary search. Nodes are revision ranges. There's
     # an edge from each node to two sub-ranges, one for the commits before its
-    # midpoint and one to the commits afterwards.
+    # midpoint and one to the commits afterwards. The midpoint is as defined by
+    # git's own bisect logic, basically it's something like "a commit whose
+    # minimum distance from any of the edges of the range is largest".
+    #
+    # If you just think about a linear history, that all just sounds like a
+    # really weird and complicaed way to describe a binary search. But thinking
+    # of it this way means it also works for non-linear histories.
+    #
+    # A couple of silly things this algorithm does that illustrates why it's
+    # suboptimal:
+    # - If you have a linear bisection range of 10 commits and you take the
+    #   first 2 of the outputs from this generator, you will get the 5th and 8th
+    #   or something, where you actually want the 3rd and 7th, or something (I
+    #   dunno I can't count). I.e. it's only optimal on linear ranges when you
+    #   take 2^n-1 items from the generator.
+    # - Say you have a bisection range that diverges into two branches that then
+    #   re-merges, and you need to pick a single commit to test. Depending on
+    #   the length of the branches, it's pretty likely that the optimal commit
+    #   to test is the point of divergence or the merge commit. This algorithm
+    #   is unlikely to pick that, instead it will probably pick a commit in the
+    #   middle of whichever branch is longer.
+    #
+    # So I think a good next evolution for this algorithm would be something
+    # like: pick N commits dividing up the current ranges such that the average
+    # length of the child ranges is minimised. Set N to the number of idle
+    # threads in our pool. Maybe computered scientists know how to do this.
+    # Maybe it could be a nice Google interview question. But I would fail it.
+    # Note that for all but the first invocation, N would be 1, so we'd
+    # basically just be finding the longest existing range between two ongoing
+    # tests, and kicking off a test for the midpoint of that range. But I don't
+    # think that simplifies anything.
+    #
+    # Anyway, for now this algorithm is easy to implement and still quite fun
+    # and its behaviour is stil not entirely ridiculous.
     ranges = [RevRange(exclude=good_refs(), include="refs/bisect/bad")]
     while ranges:
         r = ranges.pop(0)
@@ -178,7 +214,10 @@ def bisect_gen():
 def do_dissect(args, pool):
     while True:
         gen = bisect_gen()
-        while not pool.full():
+        # Start as many worker threads as possible, unless there's a reuslt
+        # pending; that will influence which commits we need to test so there's
+        # po point in adding new ones until we've processed it.
+        while pool.in_q_length() > pool.num_threads and not pool._out_q_length():
             try:
                 rev = next(gen)
             except StopIteration:
