@@ -43,7 +43,6 @@ class GitDissectTest(unittest.TestCase):
         self.git("commit", "--allow-empty", "-m", msg)
         return self.git("rev-parse", "HEAD")
 
-    # TODO: we actually don't need the "executable" part.
     def write_executable(self, path, content):
         """Write an executable and git add it"""
         with open(path, "w") as f:
@@ -97,7 +96,7 @@ class TestBisection(GitDissectTest):
         self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["sh", "run.sh"]), bad)
+        self.assertEqual(git_dissect.dissect(["sh","run.sh"]), bad)
         self.assertFalse(os.path.exists("output.txt"), "Script was run unnecessarily")
 
     def test_smoke(self):
@@ -143,17 +142,17 @@ class TestBisection(GitDissectTest):
     def test_bug_in_branch(self):
         # Branched history where the bug arises in one of the branches.
         self.write_pass_fail_script(fail=False)
-        good = self.commit()
-        optional = self.commit()
+        good = self.commit("good")
+        optional = self.commit("optional")
         self.git("checkout", good)
         self.write_pass_fail_script(fail=True)
-        want = self.commit()
-        also_test = self.commit()
+        want = self.commit("want")
+        also_test = self.commit("also_test")
         test_me = [also_test]
         self.git("checkout", optional)
         self.git("merge", "--no-edit", also_test)
         test_me.append(self.git("rev-parse", "HEAD"))
-        bad = self.commit()
+        bad = self.commit("bad")
 
         self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))

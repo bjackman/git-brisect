@@ -20,6 +20,9 @@ import queue
 import shutil
 import sys
 
+from typing import Optional
+from collections.abc import Iterable
+
 logger = logging.getLogger(__name__)
 
 class NotBisectingError(Exception):
@@ -34,7 +37,7 @@ def run_cmd(args: list[str]) -> str:
     if result.returncode != 0:
         raise CalledProcessError(
             f'Command {args} failed with code {result.returncode}. ' +
-            f'Stderr:\n{result.stderr.decode()}')
+            f'Stderr:\n{result.stderr.decode()}\nStdout:\n{result.stdout.decode()}')
     return result.stdout.decode()
 
 def all_refs() -> list[str]:
@@ -43,11 +46,51 @@ def all_refs() -> list[str]:
 def good_refs() -> list[str]:
     return [r for r in all_refs() if r.startswith("refs/bisect/good")]
 
-def rev_list(include: list[str], exclude: list[str], extra_args=[]) -> list[str]:
-    args =  ["git", "rev-list"] + include + ["^" + r for r in exclude] + extra_args
-    out = run_cmd(args)
-    return [l.split(" ")[0] for l in out.splitlines()]
+def rev_parse(rev):
+    return run_cmd(["git", "rev_parse", rev]).strip()
 
+class RevRange:
+    # Git bisect always has one "include" i.e. the single good ref. I don't
+    # really know why there is 1 good ref but N bad ones. But we just follow
+    # git's lead. I thik this would probably be obvious if you tried to
+    # implement this algorithm in a way where both ends of the range can be
+    # plural?
+    def __init__(self, exclude: Iterable[str], include: str):
+        self.exclude = exclude
+        self.include = include
+
+        self._commits: Optional[set[str]] = None
+        self._midpoint: Optional[str] = None
+
+    def __str__(self):
+        spec_parts = [rev_parse(s)[:12] for s in self._spec()]
+        return "RevRange([%s] %d commits)" % (" ".join(spec_parts), len(self.commits()))
+
+    def _spec(self):
+        """Args to be passed to git rev-list to describe the range"""
+        return [self.include] + ["^" + r for r in self.exclude]
+
+    def _get_commits(self):
+        if self._commits is not None:
+            return
+
+        # Find commits in range, sorted by descending distance to nearest
+        # endpoint.
+        args =  ["git", "rev-list", "--bisect-all"] + self._spec()
+        out = run_cmd(args)
+        commits_by_distance = [l.split(" ")[0] for l in out.splitlines()]
+
+        if len(commits_by_distance):
+            self._midpoint = commits_by_distance[0]
+        self._commits = set(commits_by_distance)
+
+    def midpoint(self) -> str:
+        self._get_commits()
+        return self._midpoint
+
+    def commits(self) -> set[str]:
+        self._get_commits()
+        return self._commits
 
 class WorkerPool:
     # Note that there really shouldn't be any need for multi-threading here, we
@@ -100,12 +143,13 @@ class WorkerPool:
         with self._cond:
             return len(self._out_q)
 
-    def cancel(self, rev):
+    def cancel(self, range: RevRange):
         with self._cond:
-            if rev in self._subprocesses:
-                # TODO: Does this work on Windows?
-                self._subprocesses[rev].send_signal(signal.SIGINT)
-            self._dequeued.add(rev)
+            for rev, p in self._subprocesses.items():
+                if rev in range.commits():
+                    # TODO: Does this work on Windows?
+                    self._subprocesses[rev].send_signal(signal.SIGINT)
+                    self._dequeued.add(rev)
 
     def _work(self, workdir):
         while True:
@@ -136,14 +180,16 @@ class WorkerPool:
                 except (PermissionError, FileNotFoundError) as e:
                     logging.info(f"Error running at {rev} ({e}), returning code 1")
                     self._out_q.append((rev, 1))
+                    self._cond.notify_all()
                     continue
 
                 self._subprocesses[rev] = p
 
             p.communicate()
-            logger.info(f"Worker in {workdir} got result {p.returncode} for {rev}")
             with self._cond:
                 self._out_q.append((rev, p.returncode))
+                logger.debug(f"Worker in {workdir} got result {p.returncode} for {rev} " +
+                             f"(new out_q lenth {len(self._out_q)}")
                 self._cond.notify_all()
 
     def wait(self):
@@ -152,6 +198,7 @@ class WorkerPool:
                 self._cond.wait()
             ret = self._out_q[0]
             self._out_q = self._out_q[1:]
+            logger.debug(f"Popped from out_q, new length {len(self._out_q)}")
             return ret
 
     def interrupt_and_join(self):
@@ -163,95 +210,77 @@ class WorkerPool:
         for t in self._threads:
             t.join()
 
-@dataclasses.dataclass
-class RevRange:
-    exclude: list[str]
-    # Git bisect always has one "include" i.e. the single good ref. I don't
-    # really know why there is 1 good ref but N bad ones. But we just follow
-    # git's lead.
-    include: str
-
-def bisect_gen():
-    """Generator for commits in the order we should test them"""
-    # This is a breadth-first sinary search. Nodes are revision ranges. There's
-    # an edge from each node to two sub-ranges, one for the commits before its
-    # midpoint and one to the commits afterwards. The midpoint is as defined by
-    # git's own bisect logic, basically it's something like "a commit whose
-    # minimum distance from any of the edges of the range is largest".
-    #
-    # If you just think about a linear history, that all just sounds like a
-    # really weird and complicaed way to describe a binary search. But thinking
-    # of it this way means it also works for non-linear histories.
-    #
-    # A couple of silly things this algorithm does that illustrates why it's
-    # suboptimal:
-    # - If you have a linear bisection range of 10 commits and you take the
-    #   first 2 of the outputs from this generator, you will get the 5th and 8th
-    #   or something, where you actually want the 3rd and 7th, or something (I
-    #   dunno I can't count). I.e. it's only optimal on linear ranges when you
-    #   take 2^n-1 items from the generator.
-    # - Say you have a bisection range that diverges into two branches that then
-    #   re-merges, and you need to pick a single commit to test. Depending on
-    #   the length of the branches, it's pretty likely that the optimal commit
-    #   to test is the point of divergence or the merge commit. This algorithm
-    #   is unlikely to pick that, instead it will probably pick a commit in the
-    #   middle of whichever branch is longer.
-    #
-    # So I think a good next evolution for this algorithm would be something
-    # like: pick N commits dividing up the current ranges such that the average
-    # length of the child ranges is minimised. Set N to the number of idle
-    # threads in our pool. Maybe computered scientists know how to do this.
-    # Maybe it could be a nice Google interview question. But I would fail it.
-    # Note that for all but the first invocation, N would be 1, so we'd
-    # basically just be finding the longest existing range between two ongoing
-    # tests, and kicking off a test for the midpoint of that range. But I don't
-    # think that simplifies anything.
-    #
-    # Anyway, for now this algorithm is easy to implement and still quite fun
-    # and its behaviour is stil not entirely ridiculous.
-    ranges = [RevRange(exclude=good_refs(), include="refs/bisect/bad")]
-    while ranges:
-        r = ranges.pop(0)
-        by_distance = rev_list(exclude=r.exclude, include=[r.include],
-                               extra_args=["--bisect-all"])
-        if len(by_distance) == 0:
-            continue # Range is empty, we reached a leaf in our search
-        midpoint = by_distance[0]
-        yield midpoint
-        # Add edge for range before the midpoint
-        ranges.append(RevRange(exclude=r.exclude, include=midpoint + "^"))
-        # And for range after.
-        ranges.append(RevRange(exclude=r.exclude + [midpoint], include=r.include))
-
 def do_dissect(args, pool):
-    while True:
-        gen = bisect_gen()
+    # Total range of commits that might contain the bug.
+    full_range = RevRange(exclude=good_refs(), include=rev_parse("refs/bisect/bad"))
+    # Subranges between commits that we've kicked off tests for. Used to
+    # prioritise commits for testing.
+    subranges = [full_range]
+    while len(full_range.commits()) > 1:
         # Start as many worker threads as possible, unless there's a reuslt
         # pending; that will influence which commits we need to test so there's
-        # po point in adding new ones until we've processed it.
-        while pool.in_q_length() < pool.num_threads and not pool.out_q_length():
-            try:
-                rev = next(gen)
-            except StopIteration:
-                # Nothing more to test, we must be done.
-                return run_cmd(["git", "rev-parse", "refs/bisect/bad"])
-            pool.enqueue(rev)
+        # po point in adding new ones until we've processed it. Here we do a
+        # breadth-first bisection of the overall range to divide it among
+        # available threads. That's not a fully optimal distribution; we want
+        # some algorithm that minimizes the average distance between the commits
+        # we test. But I can't think of such an algorithm; this one is easy to
+        # implement, still kinda fun, and produces not completely insane
+        # behaviour.
+        while subranges and pool.in_q_length() < pool.num_threads and not pool.out_q_length():
+            r = subranges.pop(0)
+            midpoint = r.midpoint()
+            pool.enqueue(midpoint)
+
+            # The midpoint divided the range into two subranges, add them to the
+            # queue unless the are empty.
+            #
+            # TODO: The two ranges we generate here can overlap. This can lead
+            # to us trying to test the same commit twice, or generally just
+            # picking commits sub-optimally. Should find a way to drop the
+            # common commits from one of the ranges. I think maybe git
+            # merge-base could work here?
+            after = RevRange(exclude=r.exclude, include=midpoint + "^")
+            if after.commits():
+                subranges.append(after)
+            before = RevRange(exclude=r.exclude + [midpoint], include=r.include)
+            if before.commits():
+                subranges.append(before)
 
         result_commit, returncode = pool.wait()
         if returncode == 0:
+            # We'll cancel all the tests of commits that are about to be
+            # subsumed by the refs/bisect/good* ref we add.
+            cancel = RevRange(exclude=good_refs(), include=result_commit)
+            # TODO: now we have a proper algorithm, running the git bisect
+            # commands is pointless.
             run_cmd(["git", "bisect", "good", result_commit])
-            cancel_from = good_refs()
-            cancel_to = [result_commit]
         else:
+            # We'll cancel everything that isn't an ancestor of the new
+            # refs/bisect/bad we're about to set.
+            bad = rev_parse("refs/bisect/bad")
+            cancel = RevRange(exclude=good_refs() + [result_commit], include=bad)
             run_cmd(["git", "bisect", "bad", result_commit])
-            cancel_from = [result_commit]
-            cancel_to = ["refs/bisect/bad"]
-        logger.info("%s result was %d, cancelling %s to %s", result_commit, returncode,
-                    cancel_from, cancel_to)
-        for commit in rev_list(include=cancel_to, exclude=cancel_from):
-            pool.cancel(commit)
+        logger.info("%s result was %d, cancelling %s", result_commit, returncode, cancel)
+        pool.cancel(cancel)
 
-    return revs[0]
+        # Update all the ranges we need to consider testing.
+        new_ranges = []
+        for r in subranges:
+            if returncode == 0:
+                new = RevRange(exclude=r.exclude + [result_commit], include=r.include)
+            else:
+                new = RevRange(exclude=r.exclude, include=result_commit)
+            logger.debug("paring \n\t%s down to \n\t%s", r, new)
+            if new.commits():
+                new_ranges.append(new)
+        # Sort by size of the range - this is like a best-first search.
+        subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
+        for r in subranges:
+            logger.debug("range to check: %v", r)
+
+        full_range = RevRange(exclude=good_refs(), include=rev_parse("refs/bisect/bad"))
+
+    return full_range.midpoint()
 
 def excepthook(*args, **kwargs):
     threading.__excepthook__(*args, **kwargs)
@@ -313,7 +342,7 @@ def do_test_every_commit(pool, commits):
 # include and exclude specify the set of commits to test.
 def test_every_commit(args, include: list[str], exclude: list[str],
                       num_threads=8, use_worktrees=True, cleanup_worktrees=False):
-    commits = rev_list(include=include, exclude=exclude)
+    commits = RevRange(include=include, exclude=exclude).commits()
 
     tmpdir = None
     if use_worktrees:
