@@ -43,6 +43,7 @@ class GitDissectTest(unittest.TestCase):
         self.git("commit", "--allow-empty", "-m", msg)
         return self.git("rev-parse", "HEAD")
 
+    # TODO: we actually don't need the "executable" part.
     def write_executable(self, path, content):
         """Write an executable and git add it"""
         with open(path, "w") as f:
@@ -96,7 +97,7 @@ class TestBisection(GitDissectTest):
         self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["run.sh"]), bad)
+        self.assertEqual(git_dissect.dissect(["sh", "run.sh"]), bad)
         self.assertFalse(os.path.exists("output.txt"), "Script was run unnecessarily")
 
     def test_smoke(self):
