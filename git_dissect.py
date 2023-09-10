@@ -78,6 +78,7 @@ class WorkerPool:
             t = threading.Thread(target=self._work, args=(workdir,))
             t.start()
             self._threads.append(t)
+        self.num_threads = len(self._threads)
 
     def enqueue(self, rev):
         with self._cond:
@@ -90,6 +91,14 @@ class WorkerPool:
             # TODO: Because we use the same condition variable for input and
             # output, we need notify_all. Rework this to avoid that.
             self._cond.notify_all()
+
+    def in_q_length(self):
+        with self._cond:
+            return len(self._in_q)
+
+    def out_q_length(self):
+        with self._cond:
+            return len(self._out_q)
 
     def cancel(self, rev):
         with self._cond:
@@ -133,7 +142,9 @@ class WorkerPool:
 
             p.communicate()
             logger.info(f"Worker in {workdir} got result {p.returncode} for {rev}")
-            self._out_q.append((rev, p.returncode))
+            with self._cond:
+                self._out_q.append((rev, p.returncode))
+                self._cond.notify_all()
 
     def wait(self):
         with self._cond:
@@ -206,6 +217,7 @@ def bisect_gen():
         if len(by_distance) == 0:
             continue # Range is empty, we reached a leaf in our search
         midpoint = by_distance[0]
+        yield midpoint
         # Add edge for range before the midpoint
         ranges.append(RevRange(exclude=r.exclude, include=midpoint + "^"))
         # And for range after.
@@ -217,12 +229,12 @@ def do_dissect(args, pool):
         # Start as many worker threads as possible, unless there's a reuslt
         # pending; that will influence which commits we need to test so there's
         # po point in adding new ones until we've processed it.
-        while pool.in_q_length() > pool.num_threads and not pool._out_q_length():
+        while pool.in_q_length() < pool.num_threads and not pool.out_q_length():
             try:
                 rev = next(gen)
             except StopIteration:
                 # Nothing more to test, we must be done.
-                return run_cmd(["git", "rev-parse", "revs/bisect/bad"])
+                return run_cmd(["git", "rev-parse", "refs/bisect/bad"])
             pool.enqueue(rev)
 
         result_commit, returncode = pool.wait()
