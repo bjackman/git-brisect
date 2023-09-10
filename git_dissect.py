@@ -418,10 +418,16 @@ if __name__ == "__main__":
 #
 # See if it's possible to bisect in a worktree, so that the main tree can
 #  be used meanwhile by the user.
-
-#  replacing args? Original idea was to have placeholders like with find
+#
+# replacing args? Original idea was to have placeholders like with find
 #  --exec. But can't remember why I thought this was useful.
+#  One usage of this would be to implement something you could pass to make's
+#  --jobserver-fd.
 #
-#   capture output
+# capture output
 #
-#   option to test based on tree? Worth checking if reverts result in the same tree.
+# option to test based on tree? Worth checking if reverts result in the same tree.
+#
+# ability to watch a range like local CI
+#
+# look into async and see if we can drop the ugly thread pool
