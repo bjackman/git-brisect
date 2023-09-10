@@ -443,3 +443,5 @@ if __name__ == "__main__":
 # ability to watch a range like local CI
 #
 # look into async and see if we can drop the ugly thread pool
+#
+# remove requirement to use special bisect refs
