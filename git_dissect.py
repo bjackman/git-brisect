@@ -167,9 +167,9 @@ class WorkerPool:
             # output, we need notify_all. Rework this to avoid that.
             self._cond.notify_all()
 
-    def in_q_length(self):
+    def num_pending(self):
         with self._cond:
-            return len(self._in_q)
+            return len(self._in_q) + len(self._subprocesses)
 
     def out_q_length(self):
         with self._cond:
@@ -222,6 +222,7 @@ class WorkerPool:
                 self._out_q.append((rev, p.returncode))
                 logger.debug(f"Worker in {workdir} got result {p.returncode} for {rev} " +
                              f"(new out_q lenth {len(self._out_q)}")
+                del self._subprocesses[rev]
                 self._cond.notify_all()
 
     def wait(self):
@@ -256,7 +257,7 @@ def do_dissect(args, pool, full_range):
         # we test. But I can't think of such an algorithm; this one is easy to
         # implement, still kinda fun, and produces not completely insane
         # behaviour.
-        while subranges and pool.in_q_length() < pool.num_threads and not pool.out_q_length():
+        while subranges and pool.num_pending() < pool.num_threads and not pool.out_q_length():
             r = subranges.pop(0)
             midpoint = r.midpoint()
             pool.enqueue(midpoint)
