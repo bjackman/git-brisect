@@ -229,8 +229,8 @@ class WorkerPool:
             t.join()
 
 def do_dissect(args, pool, full_range):
-    # Subranges between commits that we've kicked off tests for. Used to
-    # prioritise commits for testing.
+    # Non-overlapping ranges of commits that we haven't yet kicked off tests
+    # for, and which haven't been excluded from full_range.
     subranges = [full_range]
     while len(full_range.commits()) > 1:
         # Start as many worker threads as possible, unless there's a result
@@ -250,15 +250,17 @@ def do_dissect(args, pool, full_range):
             pool.enqueue(midpoint)
 
             # The midpoint divided the range into two subranges, add them to the
-            #
-            # TODO: The two ranges we generate here can overlap. This can lead
-            # to us trying to test the same commit twice, or generally just
-            # picking commits sub-optimally. Should find a way to drop the
-            # common commits from one of the ranges. I think maybe git
-            # merge-base could work here?
+            # queue.
             after = RevRange(exclude=r.exclude, include=midpoint + "^")
-            before = RevRange(exclude=r.exclude + [midpoint], include=r.include)
+            # To ensure the two subranges are non-overlapping, exclude their common ancestor.
+            mb = merge_base(r.include, midpoint)
+            before = RevRange(exclude=r.exclude + [midpoint, mb], include=r.include)
             subranges += [before, after]
+
+            # The commit we'll learn most by testing is the midpoint of the
+            # largest remaining subrange. Sorting by size makes this a sort of
+            # hill-climbing search.
+            subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
         if returncode == 0:
@@ -279,16 +281,6 @@ def do_dissect(args, pool, full_range):
 
         logger.info("%s result was %d, cancelling %s", result_commit, returncode, cancel)
         pool.cancel(cancel)
-
-        # Update all the ranges we need to consider testing.
-        new_ranges = []
-        for r in subranges:
-            if returncode == 0:
-                new_ranges.append(RevRange(exclude=r.exclude + [result_commit], include=r.include))
-            else:
-                new_ranges.append(RevRange(exclude=r.exclude, include=result_commit))
-        # Sort by size of the range - this is like a best-first search.
-        subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
 
     return full_range.midpoint()
 
