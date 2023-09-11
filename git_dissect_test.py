@@ -388,9 +388,7 @@ class TestTestEveryCommit(GitDissectTest):
 
 
 if __name__ == "__main__":
-    logging.getLogger().setLevel(logging.DEBUG)
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(logging.DEBUG)
-    logging.getLogger().addHandler(handler)
+    logging.basicConfig(level=logging.DEBUG,
+                        format="%(asctime)s %(levelname)-6s %(message)s")
 
     unittest.main()
