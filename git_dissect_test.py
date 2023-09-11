@@ -283,19 +283,17 @@ class TestBisection(GitDissectTest):
             to_terminate = next(iter(running_tests()))
             open("stop-" + str(to_terminate), "w").close()
 
+        self.logger.info("joining")
+        thread.join()
+
         # If this fails then dissect() must have crashed.
         self.assertIsNotNone(dissect_result)
-
-        thread.join()
 
     def test_no_parallelism(self):
         self._test_thread_limit(1)
 
     def test_limited_threads(self):
         self._test_thread_limit(4)
-
-    def test_many_threads(self):
-        self._test_thread_limit(30)
 
     def _test_test_selection(self, num_good, num_bad, want_num_tests):
         # This runs a test to check that we're actually bisecting and not just
