@@ -44,7 +44,7 @@ def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
 
 def merge_base(*commits):
-    return run_cmd(["git", "merge-base"] + commits).strip()
+    return run_cmd(["git", "merge-base"] + list(commits)).strip()
 
 class BadRangeError(Exception):
     pass
