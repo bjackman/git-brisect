@@ -270,13 +270,10 @@ def do_dissect(args, pool):
                 new = RevRange(exclude=r.exclude + [result_commit], include=r.include)
             else:
                 new = RevRange(exclude=r.exclude, include=result_commit)
-            logger.debug("paring \n\t%s down to \n\t%s", r, new)
             if new.commits():
                 new_ranges.append(new)
         # Sort by size of the range - this is like a best-first search.
         subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
-        for r in subranges:
-            logger.debug("range to check: %v", r)
 
         full_range = RevRange(exclude=good_refs(), include=rev_parse("refs/bisect/bad"))
 
