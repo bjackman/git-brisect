@@ -301,11 +301,11 @@ class TestBisection(GitDissectTest):
         # testing every commit or picking random commits or something.
         self.write_pass_fail_script(fail=False)
         commits = []
-        for _ in range(num_good):
-            commits.append(self.commit())
+        for i in range(num_good):
+            commits.append(self.commit(f"good {i}"))
         self.write_pass_fail_script(fail=True)
-        for _ in range(num_bad):
-            commits.append(self.commit())
+        for i in range(num_bad):
+            commits.append(self.commit(f"bad {i}"))
 
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
         result = git_dissect.dissect(f"{commits[0]}..{commits[-1]}",
@@ -326,7 +326,7 @@ class TestBisection(GitDissectTest):
         self._test_test_selection(5, 10, 4)
 
     def test_test_selection_3(self):
-        self._test_test_selection(1, 1, 2)
+        self._test_test_selection(2, 2, 2)
 
     # TODO:
     #
