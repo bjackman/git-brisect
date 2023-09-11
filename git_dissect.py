@@ -341,12 +341,6 @@ def dissect(rev_range, args, num_threads=8, use_worktrees=True, cleanup_worktree
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
-@dataclasses.dataclass
-class Range:
-    start: str
-    end: str
-    broken: bool
-
 def do_test_every_commit(pool, commits):
     for commit in commits:
         pool.enqueue(commit)
