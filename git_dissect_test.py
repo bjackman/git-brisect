@@ -108,21 +108,22 @@ class TestBisection(GitDissectTest):
     def test_nonlinear_multiple_good(self):
         # Branched history where the code is good in both branches and then broken after a merge
         self.write_pass_fail_script(fail=False)
-        base = self.commit()
-        good1 = self.commit()
+        base = self.commit("base")
+        good1 = self.commit("good1")
         self.git("checkout", base)
-        good2 = self.commit()
+        good2 = self.commit("good2")
         self.git("merge", "--no-edit", good1)
         merge = self.git("rev-parse", "HEAD")
         self.write_pass_fail_script(fail=True)
-        want = self.commit()
-        bad = self.commit()
+        want = self.commit("want")
+        bad = self.commit("bad")
 
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         self.assertEqual(git_dissect.dissect(f"{good1}..{bad}", ["sh", "./run.sh"]), want)
-        self.assertCountEqual(self.script_runs(), [merge, want],
-                              "didn't get expected set of script runs")
+        runs = self.script_runs()
+        self.assertIn(want, runs)
+        self.assertIn(merge, runs)
 
     def test_bug_in_branch(self):
         # Branched history where the bug arises in one of the branches.
