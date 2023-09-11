@@ -246,6 +246,8 @@ def do_dissect(args, pool, full_range):
         # behaviour.
         while subranges and pool.num_pending() < pool.num_threads and not pool.out_q_length():
             r = subranges.pop(0)
+            if not r.commits():
+                continue
             midpoint = r.midpoint()
             pool.enqueue(midpoint)
 
@@ -258,11 +260,8 @@ def do_dissect(args, pool, full_range):
             # common commits from one of the ranges. I think maybe git
             # merge-base could work here?
             after = RevRange(exclude=r.exclude, include=midpoint + "^")
-            if after.commits():
-                subranges.append(after)
             before = RevRange(exclude=r.exclude + [midpoint], include=r.include)
-            if before.commits():
-                subranges.append(before)
+            subranges += [before, after]
 
         result_commit, returncode = pool.wait()
         if returncode == 0:
@@ -288,11 +287,9 @@ def do_dissect(args, pool, full_range):
         new_ranges = []
         for r in subranges:
             if returncode == 0:
-                new = RevRange(exclude=r.exclude + [result_commit], include=r.include)
+                new_ranges.append(RevRange(exclude=r.exclude + [result_commit], include=r.include))
             else:
-                new = RevRange(exclude=r.exclude, include=result_commit)
-            if new.commits():
-                new_ranges.append(new)
+                new_ranges.append(RevRange(exclude=r.exclude, include=result_commit))
         # Sort by size of the range - this is like a best-first search.
         subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
 
