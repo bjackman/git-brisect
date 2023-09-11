@@ -25,13 +25,7 @@ from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
-class NotBisectingError(Exception):
-    pass
-
 class CalledProcessError(Exception):
-    pass
-
-class BadRangeError(Exception):
     pass
 
 def run_cmd(args: list[str]) -> str:
