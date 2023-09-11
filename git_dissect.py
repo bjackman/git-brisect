@@ -63,8 +63,7 @@ class RevRange:
         self._midpoint: Optional[str] = None
 
     def __str__(self):
-        spec_parts = [rev_parse(s)[:12] for s in self._spec()]
-        return "RevRange([%s] %d commits)" % (" ".join(spec_parts), len(self.commits()))
+        return "RevRange([%s] %d commits)" % (self._spec(), len(self.commits()))
 
     def _spec(self):
         """Args to be passed to git rev-list to describe the range"""
