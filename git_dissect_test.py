@@ -289,8 +289,11 @@ class TestBisection(GitDissectTest):
             if not thread.is_alive():
                 break
 
-            running = running_tests()
-            self.assertEqual(len(tests_in_state("started")), i + num_threads)
+            # TODO: I think the failure here is a race condition in the thread
+            # pool code. Probably instead of debugging, best to just clean it
+            # up.
+            self.assertEqual(len(tests_in_state("started")), i + num_threads,
+                             "after stopping %d threads" % i)
 
             # Let one of the threads exit
             to_terminate = next(iter(running_tests()))
