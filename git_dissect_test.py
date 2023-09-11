@@ -311,7 +311,7 @@ class TestBisection(GitDissectTest):
         self._test_thread_limit(4)
 
     def test_many_threads(self):
-        self._test_thread_limit(4)
+        self._test_thread_limit(30)
 
     def _test_test_selection(self, num_good, num_bad, want_num_tests):
         # This runs a test to check that we're actually bisecting and not just
