@@ -252,7 +252,6 @@ def do_dissect(args, pool, full_range):
             pool.enqueue(midpoint)
 
             # The midpoint divided the range into two subranges, add them to the
-            # queue unless the are empty.
             #
             # TODO: The two ranges we generate here can overlap. This can lead
             # to us trying to test the same commit twice, or generally just
