@@ -74,7 +74,6 @@ class RevRange:
             raise BadRangeError("Can't dissect ranges specified with '...'. Did you mean '..'?")
 
         for part in s.split(" "):
-            logging.debug(f"parsing |{part}|")
             if not part:
                 continue
             elif ".." in part:
@@ -82,7 +81,6 @@ class RevRange:
                 if len(dd_parts) != 2:
                     raise BadRangeError("%s contains more than one '..'" % s)
                 exclude.append(dd_parts[0])
-                logging.info(f"append {dd_parts[1]}")
                 include.append(dd_parts[1])
             elif part.startswith("^"):
                 exclude.append(part[1:])
