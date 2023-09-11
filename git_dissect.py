@@ -235,7 +235,7 @@ def do_dissect(args, pool, full_range):
     # prioritise commits for testing.
     subranges = [full_range]
     while len(full_range.commits()) > 1:
-        # Start as many worker threads as possible, unless there's a reuslt
+        # Start as many worker threads as possible, unless there's a result
         # pending; that will influence which commits we need to test so there's
         # po point in adding new ones until we've processed it. Here we do a
         # breadth-first bisection of the overall range to divide it among
