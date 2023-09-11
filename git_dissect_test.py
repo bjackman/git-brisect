@@ -367,6 +367,56 @@ class TestTestEveryCommit(GitDissectTest):
 
         self.assertCountEqual(results, want)
 
+class TestRevRange(GitDissectTest):
+    def test_full_spec(self):
+        # Hack: when specifying the range in full we don't actually need access
+        # to the repo so we dont bother using "real" refs here.
+        # This would fail if you tried to access "commits()" etc.
+
+        r = git_dissect.RevRange.from_string("foo ^bar ^baz")
+        self.assertEqual(r.include, "foo")
+        self.assertCountEqual(r.exclude, ["bar", "baz"])
+
+        r = git_dissect.RevRange.from_string("foo   ^bar") # multiple spaces
+        self.assertEqual(r.include, "foo")
+        self.assertCountEqual(r.exclude, ["bar"])
+
+        r = git_dissect.RevRange.from_string("^bar foo ^baz")
+        self.assertEqual(r.include, "foo")
+        self.assertCountEqual(r.exclude, ["bar", "baz"])
+
+        r = git_dissect.RevRange.from_string("^bar ^baz foo")
+        self.assertEqual(r.include, "foo")
+        self.assertCountEqual(r.exclude, ["bar", "baz"])
+
+        r = git_dissect.RevRange.from_string("foo")
+        self.assertEqual(r.include, "foo")
+        self.assertCountEqual(r.exclude, [])
+
+        with self.assertRaises(git_dissect.BadRangeError):
+            _ = git_dissect.RevRange.from_string("^foo")
+
+        with self.assertRaises(git_dissect.BadRangeError):
+            _ = git_dissect.RevRange.from_string("foo bar")
+
+    def test_dot_dot(self):
+        r = git_dissect.RevRange.from_string("foo..bar")
+        self.assertEqual(r.include, "bar")
+        self.assertCountEqual(r.exclude, ["foo"])
+
+        r = git_dissect.RevRange.from_string("foo..bar ^baz")
+        self.assertEqual(r.include, "bar")
+        self.assertCountEqual(r.exclude, ["foo", "baz"])
+
+        r = git_dissect.RevRange.from_string("^baz foo..bar")
+        self.assertEqual(r.include, "bar")
+        self.assertCountEqual(r.exclude, ["foo", "baz"])
+
+        with self.assertRaises(git_dissect.BadRangeError):
+            _ = git_dissect.RevRange.from_string("foo..bar..baz")
+
+        with self.assertRaises(git_dissect.BadRangeError):
+            _ = git_dissect.RevRange.from_string("foo..bar baz")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,

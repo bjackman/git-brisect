@@ -46,6 +46,9 @@ def rev_parse(rev):
 def merge_base(*commits):
     return run_cmd(["git", "merge-base"] + commits).strip()
 
+class BadRangeError(Exception):
+    pass
+
 class RevRange:
     # Git bisect always has one "include" i.e. the single good ref. I don't
     # really know why there is 1 good ref but N bad ones. But we just follow
@@ -62,32 +65,38 @@ class RevRange:
     @classmethod
     def from_string(cls, s):
         # TODO test
-        if ".." in s:
-            parts = s.split("..")
-            if len(parts) != 2:
-                raise BadRangeError("%s contains more than one '..'" % s)
-            return cls(exclude=[parts[0]], include=parts[1])
-        if "..." in s:
-            parts = s.split("...")
-            if len(parts) != 2:
-                raise BadRangeError("%s contains more than one '...'" % s)
-            [include, exclude] = parts
-            return cls(exclude=[exclude]+merge_base(include, exclude), include=include)
-
         exclude = []
-        include = None
+        include = []
+
+        # Would generally have multiple tips. If the user can't specify it with
+        # '..' then we can't dissect it.
+        if "..." in s:
+            raise BadRangeError("Can't dissect ranges specified with '...'. Did you mean '..'?")
+
         for part in s.split(" "):
-            if part.startswith("^"):
+            logging.debug(f"parsing |{part}|")
+            if not part:
+                continue
+            elif ".." in part:
+                dd_parts = part.split("..")
+                if len(dd_parts) != 2:
+                    raise BadRangeError("%s contains more than one '..'" % s)
+                exclude.append(dd_parts[0])
+                logging.info(f"append {dd_parts[1]}")
+                include.append(dd_parts[1])
+            elif part.startswith("^"):
                 exclude.append(part[1:])
-            elif include is not None:
-                # I don't realy know why this restriction exists; it would
-                # complicate the implementation in some nontrivial ways but I
-                # feel it could be done. Would be interesting to find out why
-                # the normal git-bisect doesn't allow it.
-                raise BadRangeError(f"Can't bisect with multiple bad revs ({part} and {include})")
             else:
-                include = part
-        return cls(exclude=exclude, include=include)
+                include.append(part)
+        if len(include) == 0:
+            raise BadRangeError(f"No commits included in range {s}")
+        if len(include) > 1:
+            # I don't realy know why this restriction exists; it would
+            # complicate the implementation in some nontrivial ways but I
+            # feel it could be done. Would be interesting to find out why
+            # the normal git-bisect doesn't allow it.
+            raise BadRangeError(f"Can't dissect with multiple tip revs: {' '.join(include)}")
+        return cls(exclude=exclude, include=include[0])
 
     def __str__(self):
         return "RevRange([%s] %d commits)" % (self._spec(), len(self.commits()))
