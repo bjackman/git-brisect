@@ -31,6 +31,9 @@ class NotBisectingError(Exception):
 class CalledProcessError(Exception):
     pass
 
+class BadRangeError(Exception):
+    pass
+
 def run_cmd(args: list[str]) -> str:
     result = subprocess.run(args, capture_output=True)
     # subprocess.CompletedProcess.check_returncode doesn't set stderr.
@@ -43,11 +46,11 @@ def run_cmd(args: list[str]) -> str:
 def all_refs() -> list[str]:
     return (l.split(" ")[1] for l in run_cmd(["git", "show-ref"]).splitlines())
 
-def good_refs() -> list[str]:
-    return [r for r in all_refs() if r.startswith("refs/bisect/good")]
-
 def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
+
+def merge_base(*commits):
+    return run_cmd(["git", "merge-base"] + commits).strip()
 
 class RevRange:
     # Git bisect always has one "include" i.e. the single good ref. I don't
@@ -61,6 +64,36 @@ class RevRange:
 
         self._commits: Optional[set[str]] = None
         self._midpoint: Optional[str] = None
+
+    @classmethod
+    def from_string(cls, s):
+        # TODO test
+        if ".." in s:
+            parts = s.split("..")
+            if len(parts) != 2:
+                raise BadRangeError("%s contains more than one '..'" % s)
+            return cls(exclude=[parts[0]], include=parts[1])
+        if "..." in s:
+            parts = s.split("...")
+            if len(parts) != 2:
+                raise BadRangeError("%s contains more than one '...'" % s)
+            [include, exclude] = parts
+            return cls(exclude=[exclude]+merge_base(include, exclude), include=include)
+
+        exclude = []
+        include = None
+        for part in s.split(" "):
+            if part.startswith("^"):
+                exclude.append(part[1:])
+            elif include is not None:
+                # I don't realy know why this restriction exists; it would
+                # complicate the implementation in some nontrivial ways but I
+                # feel it could be done. Would be interesting to find out why
+                # the normal git-bisect doesn't allow it.
+                raise BadRangeError(f"Can't bisect with multiple bad revs ({part} and {include})")
+            else:
+                include = part
+        return cls(exclude=exclude, include=include)
 
     def __str__(self):
         return "RevRange([%s] %d commits)" % (self._spec(), len(self.commits()))
@@ -209,9 +242,7 @@ class WorkerPool:
         for t in self._threads:
             t.join()
 
-def do_dissect(args, pool):
-    # Total range of commits that might contain the bug.
-    full_range = RevRange(exclude=good_refs(), include=rev_parse("refs/bisect/bad"))
+def do_dissect(args, pool, full_range):
     # Subranges between commits that we've kicked off tests for. Used to
     # prioritise commits for testing.
     subranges = [full_range]
@@ -249,16 +280,19 @@ def do_dissect(args, pool):
         if returncode == 0:
             # We'll cancel all the tests of commits that are about to be
             # subsumed by the refs/bisect/good* ref we add.
-            cancel = RevRange(exclude=good_refs(), include=result_commit)
-            # TODO: now we have a proper algorithm, running the git bisect
-            # commands is pointless.
-            run_cmd(["git", "bisect", "good", result_commit])
+            cancel = RevRange(exclude=full_range.exclude, include=result_commit)
+            # Now update full_range to exclude the known-good commits
+            full_range = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
         else:
-            # We'll cancel everything that isn't an ancestor of the new
-            # refs/bisect/bad we're about to set.
-            bad = rev_parse("refs/bisect/bad")
-            cancel = RevRange(exclude=good_refs() + [result_commit], include=bad)
-            run_cmd(["git", "bisect", "bad", result_commit])
+            # We'll cancel everything that isn't an ancestor of the new bad commit.
+            cancel = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
+            # Now update full_range to exclude the known-bad commits
+            full_range = RevRange(exclude=full_range.exclude, include=result_commit)
+
+        # TODO: clean up multiple returns rofl.
+        if len(full_range.commits()) == 0:
+            return result_commit
+
         logger.info("%s result was %d, cancelling %s", result_commit, returncode, cancel)
         pool.cancel(cancel)
 
@@ -274,8 +308,6 @@ def do_dissect(args, pool):
         # Sort by size of the range - this is like a best-first search.
         subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
 
-        full_range = RevRange(exclude=good_refs(), include=rev_parse("refs/bisect/bad"))
-
     return full_range.midpoint()
 
 def excepthook(*args, **kwargs):
@@ -284,18 +316,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def in_bisect() -> bool:
-    try:
-        run_cmd(["git", "bisect", "log"])
-    except CalledProcessError:
-        return False
-    else:
-        return True
-
-def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
-    if not in_bisect():
-        raise NotBisectingError("Couldn't run 'git bisect log' - did you run 'git bisect'?")
-
+def dissect(rev_range, args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     tmpdir = None
     if use_worktrees:
         tmpdir = tempfile.mkdtemp()
@@ -310,7 +331,7 @@ def dissect(args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
         pool = WorkerPool(args,
                           worktrees or [os.getcwd() for _ in range(num_threads)],
                           cleanup_worktrees=cleanup_worktrees)
-        return do_dissect(args, pool)
+        return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
             pool.interrupt_and_join()
@@ -336,10 +357,9 @@ def do_test_every_commit(pool, commits):
     return results
 
 # include and exclude specify the set of commits to test.
-def test_every_commit(args, include: list[str], exclude: list[str],
+def test_every_commit(rev_range: str, args: [str],
                       num_threads=8, use_worktrees=True, cleanup_worktrees=False):
-    commits = RevRange(include=include, exclude=exclude).commits()
-
+    commits = RevRange.from_string(rev_range).commits()
     tmpdir = None
     if use_worktrees:
         tmpdir = tempfile.mkdtemp()
@@ -439,11 +459,12 @@ if __name__ == "__main__":
                 run_cmd(["git", "bisect", "bad", args.to])
             if "refs/bisect/bad" not in all_refs():
                 run_cmd(["git", "bisect", "bad"])
-            result = dissect(args.cmd,
-                            num_threads=args.num_threads,
-                            use_worktrees=not args.no_worktrees,
-                            cleanup_worktrees=(not args.no_worktrees and
-                                    not args.no_cleanup_worktrees))
+            rev_range = "refs/bisect/good..refs/bisect/bad" # TODO
+            result = dissect(rev_range, args.cmd,
+                             num_threads=args.num_threads,
+                             use_worktrees=not args.no_worktrees,
+                             cleanup_worktrees=(not args.no_worktrees and
+                                     not args.no_cleanup_worktrees))
             print("First bad commit is " + result)
         finally:
             if not was_in_bisect:

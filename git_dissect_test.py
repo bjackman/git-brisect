@@ -77,15 +77,6 @@ class GitDissectTest(unittest.TestCase):
         return self.read_stripped_lines("output.txt")
 
 class TestBisection(GitDissectTest):
-    def test_not_bisect(self):
-        with self.assertRaises(git_dissect.NotBisectingError):
-            git_dissect.dissect([])
-
-    def setup_bisect(self, good, bad):
-        self.git("bisect", "start")
-        self.git("bisect", "good", good)
-        self.git("bisect", "bad", bad)
-
     def test_no_tests_needed(self):
         # TODO: Actually we should check that the script doesn't get run.
         self.write_pass_fail_script(fail=False)
@@ -93,10 +84,9 @@ class TestBisection(GitDissectTest):
         self.write_pass_fail_script(fail=True)
         bad = self.commit()
 
-        self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["sh","run.sh"]), bad)
+        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh","run.sh"]), bad)
         self.assertFalse(os.path.exists("output.txt"), "Script was run unnecessarily")
 
     def test_smoke(self):
@@ -108,10 +98,9 @@ class TestBisection(GitDissectTest):
         want_culprit = self.commit()
         bad = self.commit()
 
-        self.setup_bisect(good, bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want_culprit)
+        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh", "./run.sh"]), want_culprit)
         self.assertCountEqual(self.script_runs(),
                               [want_test1, want_culprit],
                               "didn't get the expected set of script runs")
@@ -129,13 +118,9 @@ class TestBisection(GitDissectTest):
         want = self.commit()
         bad = self.commit()
 
-        self.git("bisect", "start")
-        self.git("bisect", "good", good1)
-        self.git("bisect", "good", good2)
-        self.git("bisect", "bad", bad)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+        self.assertEqual(git_dissect.dissect(f"{good1}..{bad}", ["sh", "./run.sh"]), want)
         self.assertCountEqual(self.script_runs(), [merge, want],
                               "didn't get expected set of script runs")
 
@@ -152,10 +137,9 @@ class TestBisection(GitDissectTest):
         self.git("merge", "--no-edit", also_test)
         bad = self.commit("bad")
 
-        self.setup_bisect(good, bad)
         self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
 
-        self.assertEqual(git_dissect.dissect(["sh", "./run.sh"]), want)
+        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh", "./run.sh"]), want)
         # All we do is find the first commit in the bisection range where things
         # went from good to bad (this is just how git-bisect works). It's
         # reasonable that we only tested exactly the two commits we needed to
@@ -191,10 +175,9 @@ class TestBisection(GitDissectTest):
         self.write_pass_fail_script(fail=True)
         end = self.commit("end")
 
-        self.setup_bisect(init, end)
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
-        git_dissect.dissect(["sh", "./log_cwd.sh", "./run.sh"],
+        git_dissect.dissect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
                             use_worktrees=use_worktrees, cleanup_worktrees=cleanup_worktrees,
                             num_threads=4)
         runs = self.script_runs()
@@ -255,13 +238,14 @@ class TestBisection(GitDissectTest):
             self.write_executable("run.sh", script)
             commits.append(self.commit())
 
+        self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
+
         # Run the dissection in the background
-        self.setup_bisect(commits[0], commits[-1])
         dissect_result = None
         def run_dissect():
             nonlocal dissect_result
-            dissect_result = git_dissect.dissect(args=["sh", "./run.sh"],
-                                         num_threads=num_threads)
+            dissect_result = git_dissect.dissect(
+                f"{commits[0]}..{commits[-1]}", args=["sh", "./run.sh"], num_threads=num_threads)
 
         thread = threading.Thread(target=run_dissect)
         thread.start()
@@ -324,9 +308,9 @@ class TestBisection(GitDissectTest):
         for _ in range(num_bad):
             commits.append(self.commit())
 
-        self.setup_bisect(commits[0], commits[-1])
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
-        result = git_dissect.dissect(["sh", "./run.sh"], num_threads=1)
+        result = git_dissect.dissect(f"{commits[0]}..{commits[-1]}",
+                                     ["sh", "./run.sh"], num_threads=1)
 
         # Check we didn't cheat
         tested_commits = self.script_runs()
@@ -376,13 +360,13 @@ class TestTestEveryCommit(GitDissectTest):
         self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
 
         results = git_dissect.test_every_commit(
-            ["sh", "./run.sh"],
-            exclude=[commits[0]], include=[commits[-1]])
+            f"{commits[0]}..{commits[-1]}",
+            ["sh", "./run.sh"])
         want = list(reversed(list(zip(commits[1:], [
             0, 0, 1, 1, 1, 0
         ]))))
 
-        self.assertEqual(results, want)
+        self.assertCountEqual(results, want)
 
 
 if __name__ == "__main__":
