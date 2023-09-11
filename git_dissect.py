@@ -47,7 +47,7 @@ def good_refs() -> list[str]:
     return [r for r in all_refs() if r.startswith("refs/bisect/good")]
 
 def rev_parse(rev):
-    return run_cmd(["git", "rev_parse", rev]).strip()
+    return run_cmd(["git", "rev-parse", rev]).strip()
 
 class RevRange:
     # Git bisect always has one "include" i.e. the single good ref. I don't
