@@ -169,16 +169,17 @@ class WorkerPool:
                     continue
                 self._dequeued.add(rev)
 
-                # TODO: Capture stdout and stderr somewhere useful.
-                run_cmd(["git", "-C", workdir, "checkout", rev])
-                if self._cleanup_worktrees:
-                    run_cmd(["git", "-C", workdir, "clean", "-fdx"])
-                try:
-                    p = subprocess.Popen(
-                        self._test_cmd, cwd=workdir,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                except (PermissionError, FileNotFoundError) as e:
-                    logging.info(f"Error running at {rev} ({e}), returning code 1")
+            # TODO: Capture stdout and stderr somewhere useful.
+            run_cmd(["git", "-C", workdir, "checkout", rev])
+            if self._cleanup_worktrees:
+                run_cmd(["git", "-C", workdir, "clean", "-fdx"])
+            try:
+                p = subprocess.Popen(
+                    self._test_cmd, cwd=workdir,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except (PermissionError, FileNotFoundError) as e:
+                logging.info(f"Error running at {rev} ({e}), returning code 1")
+                with self._cond:
                     self._out_q.append((rev, 1))
                     self._cond.notify_all()
                     continue
