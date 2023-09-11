@@ -147,7 +147,6 @@ class WorkerPool:
         self._out_q = []
         self._threads = []
         self._subprocesses = {}
-        self._dequeued = set()
         self._done = False
         self._test_cmd = test_cmd
         self._cleanup_worktrees = cleanup_worktrees
@@ -160,10 +159,6 @@ class WorkerPool:
 
     def enqueue(self, rev):
         with self._cond:
-            if rev in self._dequeued:
-                logger.info(f"Ignoring enqueue for already-dequeued revision {rev}")
-                return
-
             self._in_q.append(rev)
             logger.info(f"Enqueued {rev}, new queue depth {len(self._in_q)}")
             # TODO: Because we use the same condition variable for input and
@@ -184,7 +179,6 @@ class WorkerPool:
                 if rev in range.commits():
                     # TODO: Does this work on Windows?
                     self._subprocesses[rev].send_signal(signal.SIGINT)
-                    self._dequeued.add(rev)
 
     def _work(self, workdir):
         while True:
@@ -196,13 +190,6 @@ class WorkerPool:
 
                 rev = self._in_q[0]
                 self._in_q = self._in_q[1:]
-                logger.info(f"Worker in {workdir} dequeued {rev}, " +
-                            f"new queue depth {len(self._in_q)}")
-
-                if rev in self._dequeued:
-                    logger.info(f"Worker in {workdir} ignoring {rev}, already dequeued")
-                    continue
-                self._dequeued.add(rev)
 
                 # TODO: Capture stdout and stderr somewhere useful.
                 run_cmd(["git", "-C", workdir, "checkout", rev])
@@ -223,8 +210,6 @@ class WorkerPool:
             p.communicate()
             with self._cond:
                 self._out_q.append((rev, p.returncode))
-                logger.debug(f"Worker in {workdir} got result {p.returncode} for {rev} " +
-                             f"(new out_q lenth {len(self._out_q)}")
                 del self._subprocesses[rev]
                 self._cond.notify_all()
 
@@ -234,7 +219,6 @@ class WorkerPool:
                 self._cond.wait()
             ret = self._out_q[0]
             self._out_q = self._out_q[1:]
-            logger.debug(f"Popped from out_q, new length {len(self._out_q)}")
             return ret
 
     def interrupt_and_join(self):
