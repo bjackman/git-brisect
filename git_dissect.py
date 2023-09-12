@@ -97,7 +97,7 @@ class RevRange:
         return cls(exclude=exclude, include=include[0])
 
     def __str__(self):
-        return "RevRange([%s] %d commits)" % (self._spec(), len(self.commits()))
+        return "RevRange([%s] %d commits)" % (" ".join(self._spec()), len(self.commits()))
 
     def _spec(self):
         """Args to be passed to git rev-list to describe the range"""
