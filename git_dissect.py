@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+from __future__ import annotations
 
 """
 Usage:
@@ -37,13 +38,15 @@ def run_cmd(args: list[str]) -> str:
             f'Stderr:\n{result.stderr.decode()}\nStdout:\n{result.stdout.decode()}')
     return result.stdout.decode()
 
-def all_refs() -> list[str]:
-    return (l.split(" ")[1] for l in run_cmd(["git", "show-ref"]).splitlines())
-
 def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
 
+def rev_list(spec):
+    return run_cmd(["git", "rev-list", spec]).splitlines()
+
 def merge_base(*commits):
+    if len(commits) == 1:
+        return commits
     return run_cmd(["git", "merge-base"] + list(commits)).strip()
 
 class BadRangeError(Exception):
@@ -124,6 +127,38 @@ class RevRange:
     def commits(self) -> set[str]:
         self._get_commits()
         return self._commits
+
+    def split(self, commit) -> (RevRange, RevRange):
+        """Split into two disjoint subranges at the given commit.
+
+        Produces a "before" subrange that the input commit and all of its ancestors within this range,
+        and an "after" subrange that is the
+        complement of that, excluding the input commit.
+        """
+        if commit not in self.commits():
+            raise RuntimeError(f"{commit} not in {self}")
+
+        before = RevRange(exclude=self.exclude, include=commit)
+        # To ensure the two subranges are non-overlapping, exclude their common ancestor.
+        mb = merge_base(self.include, commit)
+        after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
+        return before, after
+
+    def split_exclusive(self, commit) -> [RevRange]:
+        """Split into disjoint subranges excluding the given commit.
+
+        This is like split but the "before" subranges do not include the given
+        commit. That means returns more than 2 subranges if the commit is a
+        merge.
+        """
+        before, after = self.split(commit)
+        before_parents = rev_list(commit + "^")
+        before_ranges = []
+        for i in range(len(before_parents)):
+            p = before_parents[i]
+            exclude = self.exclude + [merge_base(p, *before_parents[i+1:])]
+            before_ranges.append(RevRange(include=p, exclude=exclude))
+        return before_ranges + [after]
 
 class WorkerPool:
     # Note that there really shouldn't be any need for multi-threading here, we
@@ -232,7 +267,7 @@ def do_dissect(args, pool, full_range):
     # Non-overlapping ranges of commits that we haven't yet kicked off tests
     # for, and which haven't been excluded from full_range.
     subranges = [full_range]
-    while len(full_range.commits()) > 1:
+    while len(full_range.commits()):
         # Start as many worker threads as possible, unless there's a result
         # pending; that will influence which commits we need to test so there's
         # po point in adding new ones until we've processed it. Here we do a
@@ -246,43 +281,33 @@ def do_dissect(args, pool, full_range):
             r = subranges.pop(0)
             if not r.commits():
                 continue
-            midpoint = r.midpoint()
-            pool.enqueue(midpoint)
 
-            # The midpoint divided the range into two subranges, add them to the
-            # queue.
-            after = RevRange(exclude=r.exclude, include=midpoint + "^")
-            # To ensure the two subranges are non-overlapping, exclude their common ancestor.
-            mb = merge_base(r.include, midpoint)
-            before = RevRange(exclude=r.exclude + [midpoint, mb], include=r.include)
-            subranges += [before, after]
+            # Start testing the midpoint, then split the r into subranges,
+            # we'll process them later. pool.enqueue(r.midpoint())
+            subranges += r.split_exclusive(r.midpoint())
 
             # The commit we'll learn most by testing is the midpoint of the
             # largest remaining subrange. Sorting by size makes this a sort of
-            # hill-climbing search.
+            # hill-climbing search. subranges = sorted(subranges, key=lambda r:
             subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
-        if returncode == 0:
-            # We'll cancel all the tests of commits that are about to be
-            # subsumed by the refs/bisect/good* ref we add.
-            cancel = RevRange(exclude=full_range.exclude, include=result_commit)
-            # Now update full_range to exclude the known-good commits
-            full_range = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
-        else:
-            # We'll cancel everything that isn't an ancestor of the new bad commit.
-            cancel = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
-            # Now update full_range to exclude the known-bad commits
-            full_range = RevRange(exclude=full_range.exclude, include=result_commit)
+        if returncode == 0:  # Commits before are now known-good.
+            (cancel, full_range) = full_range.split(result_commit)
+        else:                # Commits after are now known-bad.
+            (full_range, cancel) = full_range.split(result_commit)
+        logger.info(f"Got result {returncode} for {result_commit}")
+        logger.info(f"    Canceling {cancel}, remaining: {full_range}")
 
-        # TODO: clean up multiple returns rofl.
-        if len(full_range.commits()) == 0:
-            return result_commit
-
-        logger.info("%s result was %d, cancelling %s", result_commit, returncode, cancel)
         pool.cancel(cancel)
+        # Abort ongoing tests to free up threads.
+        # Drop known-* commits from future testing. subranges are either subsets
+        # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
+        # off a test for a commit within it, in which case we should have split
+        # it up).
+        subranges = [s for s in subranges if s.midpoint() in full_range.commits()]
 
-    return full_range.midpoint()
+    return rev_parse(full_range.include)
 
 def excepthook(*args, **kwargs):
     threading.__excepthook__(*args, **kwargs)
