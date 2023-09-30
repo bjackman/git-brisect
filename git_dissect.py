@@ -131,34 +131,38 @@ class RevRange:
     def split(self, commit) -> (RevRange, RevRange):
         """Split into two disjoint subranges at the given commit.
 
-        Produces a "before" subrange that the input commit and all of its ancestors within this range,
-        and an "after" subrange that is the
+        Produces a "before" subrange that is the input commit and all of its
+        ancestors within this range, and an "after" subrange that is the
         complement of that, excluding the input commit.
         """
         if commit not in self.commits():
+            # Actually we could just return self and an empty range. But since
+            # we don't expect to need this, we just fail at the moment.
             raise RuntimeError(f"{commit} not in {self}")
 
         before = RevRange(exclude=self.exclude, include=commit)
-        # To ensure the two subranges are non-overlapping, exclude their common ancestor.
+        # To ensure the two subranges are non-overlapping, exclude their common
+        # ancestor. ACTUALLY, is there a bug here? We generate two ranges with
+        # no gap between them; normally a gap between ranges represents some
+        # knowledge that we have, but not here.
         mb = merge_base(self.include, commit)
         after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
         return before, after
 
-    def split_exclusive(self, commit) -> [RevRange]:
-        """Split into disjoint subranges excluding the given commit.
+    def drop_include(self) -> [RevRange]:
+        """Return subranges of this range, without @include
 
-        This is like split but the "before" subranges do not include the given
-        commit. That means returns more than 2 subranges if the commit is a
-        merge.
+        Returns one subrange for each of @include's parents. The union of the
+        subranges is this range plus @include. The intersection is empty.
         """
-        before, after = self.split(commit)
-        before_parents = rev_list(commit + "^")
-        before_ranges = []
-        for i in range(len(before_parents)):
-            p = before_parents[i]
-            exclude = self.exclude + [merge_base(p, *before_parents[i+1:])]
-            before_ranges.append(RevRange(include=p, exclude=exclude))
-        return before_ranges + [after]
+        # Note - If we have an efficient implementation of this algorithm, I
+        # think we can drop the "one include" restriction.
+        parents = rev_list(commit + "^")
+        ret = []
+        for i, p in enumerate(parents):
+            prior_parents = [p for p in range(i)]
+            ret.append(RevRange(exclude=self.exclude + prior_parents, include=p))
+        return ret
 
 class WorkerPool:
     # Note that there really shouldn't be any need for multi-threading here, we
@@ -284,7 +288,7 @@ def do_dissect(args, pool, full_range):
 
             # Start testing the midpoint, then split the r into subranges,
             # we'll process them later. pool.enqueue(r.midpoint())
-            subranges += r.split_exclusive(r.midpoint())
+            subranges += r.split(r.midpoint())
 
             # The commit we'll learn most by testing is the midpoint of the
             # largest remaining subrange. Sorting by size makes this a sort of
