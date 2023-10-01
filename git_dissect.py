@@ -50,6 +50,9 @@ def merge_base(*commits):
         return commits
     return run_cmd(["git", "merge-base"] + list(commits)).strip()
 
+def describe(rev):
+    return run_cmd(["git", "describe", "--tags", "--always", rev]).strip()
+
 class BadRangeError(Exception):
     pass
 
@@ -101,11 +104,8 @@ class RevRange:
         return cls(exclude=exclude, include=include[0])
 
     def __str__(self):
-        return "RevRange([%s] %d commits)" % (" ".join(self._spec()), len(self.commits()))
-
-    def _spec(self):
-        """Args to be passed to git rev-list to describe the range"""
-        return [self.include] + ["^" + r for r in self.exclude]
+        return "RevRange([%s %s] %d commits)" % (
+            describe(self.include), " ".join("^" + describe(e) for e in self.exclude), len(self.commits()))
 
     def _get_commits(self):
         if self._commits is not None:
@@ -113,7 +113,8 @@ class RevRange:
 
         # Find commits in range, sorted by descending distance to nearest
         # endpoint.
-        args =  ["git", "rev-list", "--bisect-all"] + self._spec()
+        args =  (["git", "rev-list", "--bisect-all"] +
+                 [self.include] + ["^" + r for r in self.exclude])
         out = run_cmd(args)
         commits_by_distance = [l.split(" ")[0] for l in out.splitlines()]
 
