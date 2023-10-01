@@ -213,7 +213,7 @@ class WorkerPool:
     def enqueue(self, rev):
         with self._cond:
             self._in_q.append(rev)
-            logger.info(f"Enqueued {rev}, new queue depth {len(self._in_q)}")
+            logger.info(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
             # TODO: Because we use the same condition variable for input and
             # output, we need notify_all. Rework this to avoid that.
             self._cond.notify_all()
@@ -317,7 +317,7 @@ def do_dissect(args, pool, full_range):
             (cancel, full_range) = full_range.split(result_commit)
         else:                # Commits after are now known-bad.
             (full_range, cancel) = full_range.split(result_commit)
-        logger.info(f"Got result {returncode} for {result_commit}")
+        logger.info(f"Got result {returncode} for {describe(result_commit)}")
         logger.info(f"    Canceling {cancel}, remaining: {full_range}")
 
         pool.cancel(cancel)
