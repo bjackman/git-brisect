@@ -621,9 +621,10 @@ class TestWithHypothesis(GitDissectTest):
         # tagged by the ID of the node they are generated from. We use that tag
         # to test if the culprit is an ancestor of HEAD; if it is then HEAD is
         # "broken".
-        git_dissect.dissect(
+        result = git_dissect.dissect(
             rev_range=range_spec,
             args=["git", "merge-base", "--is-ancestor", str(culprit_node_id), str(leaf_id)])
+        self.assertEqual(self.describe(result), str(culprit_node_id))
 
     # TODO: test multiple "good" that are not the root of the repo
 
