@@ -128,7 +128,7 @@ class RevRange:
         self._get_commits()
         return self._commits
 
-    def split(self, commit) -> (RevRange, RevRange):
+    def split(self, commit: str) -> (RevRange, RevRange):
         """Split into two disjoint subranges at the given commit.
 
         Produces a "before" subrange that is the input commit and all of its
