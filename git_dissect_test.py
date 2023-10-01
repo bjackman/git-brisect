@@ -569,21 +569,25 @@ class TestWithHypothesis(GitDissectTest):
 
         self.addClassCleanup(lambda: shutil.rmtree(tmpdir))
 
-    def assertSetPartition(self, subsets: Iterable[set], superset: set):
-        subsets = list(subsets)
-        subset_union = set().union(*subsets)
-        if subset_union != superset:
-            raise AssertionError(
-                "Subsets not a partition of the superset: " +
-                f"Union of {len(subsets)} subsets is not the superset\n" +
-                f"In subsets but not superset: {subset_union - superset}\n" +
-                f"In superset but not in subsets: {superset - subset_union}")
+    def describe(self, rev: str) -> str:
+        return self.git("describe", "--tags", rev).strip()
+
+    # Asserts that subsets are disjoint and that their union is superset.
+    # Assumes that the sets are of git revisions that can be `git describe`d,
+    # i.e. they were set up by setup_repo so they have tags.
+    def assertCommitSetPartition(self, subsets: Iterable[set[str]], superset: set[str]):
+        # "describe" the commits; because we tagged each commit with the ID of
+        # the corresponding DAG node this produces error messages that are
+        # helpful when looking at the example inputs.
+        subsets = list(map(lambda s: set(map(self.describe, s)), subsets))
+        superset = set(map(self.describe, superset))
+
+        self.assertSetEqual(set().union(*subsets), superset)
         subsets_size = sum(len(s) for s in subsets)
-        if subsets_size < len(superset):
+        if subsets_size < len(superset):  # Above should already have failed?
             raise RuntimeError("errrrrrrr ummmmmm bug in the test logic!")
-        if subsets_size > len(superset):
-            raise AssertionError(
-                "Subsets not a partition of the superset: Some of the subsets overlap")
+        # If subsets_size > len(superset) then they must not be disjoint.
+        self.assertEqual(subsets_size, len(superset))
 
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
@@ -596,12 +600,12 @@ class TestWithHypothesis(GitDissectTest):
         if not m:
             return # Range is empty
         before, after = rev_range.split(m)
-        self.assertSetPartition((before.commits(), after.commits()), rev_range.commits())
+        self.assertCommitSetPartition((before.commits(), after.commits()), rev_range.commits())
 
         # Same for dropping the tip of the range.
         subranges = rev_range.drop_include()
-        self.assertSetPartition((s.commits() for s in subranges),
-                                rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
+        self.assertCommitSetPartition((s.commits() for s in subranges),
+                                      rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
     @hypothesis.given(dag_node_leaf=with_node_and_reachable_leaf(dags()))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
