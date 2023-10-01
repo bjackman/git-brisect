@@ -437,6 +437,18 @@ class DagNode:
     i: int
     parents: list[DagNode]
 
+    # Includes the node itself.
+    def ancestor_ids(self) -> list[int]:
+      ancestors = set()
+      def f(node):
+          ancestors.add(node.i)
+          for p in node.parents:
+              f(p)
+      f(self)
+      # Sorting not functionally necessary. I have a very weak and fuzzy
+      # suspicion it might improve Hypthoesis' search performance.
+      return sorted(ancestors)
+
 @dataclasses.dataclass(frozen=True)
 class Dag:
     """DAG represented as a set of edges"""
@@ -497,6 +509,20 @@ dags = lambda: hypothesis.strategies.recursive(
 def with_node_range(draw, dags):
     dag = draw(dags.filter(lambda d: d.num_nodes > 1))
     return (dag, draw(distinct_sorted_uint_pairs(max_value=dag.num_nodes-1)))
+
+# Strategy that generates a DAG and the ID of a node within that DAG, and a leaf
+# node that is reachable from that other node.
+@hypothesis.strategies.composite
+def with_node_and_reachable_leaf(draw, dags):
+    dag = draw(dags)
+    leaves = set(range(dag.num_nodes))
+    for src, _ in dag.edges:
+        if src in leaves:
+            leaves.remove(src)
+    leaf_id = sorted(leaves)[draw(uints_upto(len(leaves) - 1))]
+    leaf_ancestors = dag.nodes()[leaf_id].ancestor_ids()
+    ancestor_id = leaf_ancestors[draw(uints_upto(len(leaf_ancestors) - 1))]
+    return (dag, ancestor_id, leaf_id)
 
 class TestWithHypothesis(GitDissectTest):
     repo_cache: dict[Dag, str] = {}  # Maps DAGs to repo paths
@@ -576,6 +602,24 @@ class TestWithHypothesis(GitDissectTest):
         subranges = rev_range.drop_include()
         self.assertSetPartition((s.commits() for s in subranges),
                                 rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
+
+    @hypothesis.given(dag_node_leaf=with_node_and_reachable_leaf(dags()))
+    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
+    def test_bisect(self, dag_node_leaf: tuple[Dag, int, int]):
+        logging.debug(dag_node_leaf)
+        dag, culprit_node_id, leaf_id = dag_node_leaf
+        self.setup_repo(dag)
+        # Bisect the range consisting of all the ancestors of the leaf node.
+        range_spec = str(leaf_id)
+        # Simulate a bug being introduced by our culprit commit. Comits are
+        # tagged by the ID of the node they are generated from. We use that tag
+        # to test if the culprit is an ancestor of HEAD; if it is then HEAD is
+        # "broken".
+        git_dissect.dissect(
+            rev_range=range_spec,
+            args=["git", "merge-base", "--is-ancestor", str(culprit_node_id), str(leaf_id)])
+
+    # TODO: test multiple "good" that are not the root of the repo
 
 
 if __name__ == "__main__":
