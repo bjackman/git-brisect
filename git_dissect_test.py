@@ -434,11 +434,11 @@ class DagNode:
     i: int
     parents: ["DagNode"]
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Dag:
     """DAG represented as a set of edges"""
     num_nodes: int
-    edges: set((int, int)) = dataclasses.field(default_factory=set)
+    edges: frozenset((int, int)) = dataclasses.field(default_factory=frozenset)
 
     def nodes(self):
         nodes = [DagNode(i=i, parents=[]) for i in range(self.num_nodes)]
@@ -496,38 +496,57 @@ def with_node_range(draw, dags):
     return (dag, draw(distinct_sorted_uint_pairs(max_value=dag.num_nodes-1)))
 
 class TestWithHypothesis(GitDissectTest):
-    # TODO: Cache repos instead of creating them every time?
+    repo_cache: dict[Dag, str] = {}  # Maps DAGs to repo paths
+
+    def setUp(self):
+        self.logger = logging.getLogger(self.id())
+        # Needed for inherited self.commit. TODO: Cleanup inheritance mess
+        self.commit_counter = 0
+
+    # Sets up and switches to a repo where the history structure matches the
+    # DAG. Each commit is tagged with the corresponding node's ID.
     def setup_repo(self, dag):
-        self.commits = {}  # Maps DagNode.i to commit hash
+        if path := self.repo_cache.get(dag):
+            os.chdir(path)
+            return
+
+        tmpdir = tempfile.mkdtemp()
+        os.chdir(tmpdir)
+        self.git("init")
+
+        commits = {}  # Maps DagNode.i to commit hash, faster than using git tags.
         def create_commit(node: DagNode):
-            if node.i in self.commits:
+            if node.i in commits:
                 return
 
             if len(node.parents) == 0:
                 # This is the "root" of the history. In this code we always have
                 # exactly one of these - check that.
-                self.assertEqual(len(self.commits), 0)
+                self.assertEqual(len(commits), 0)
 
             for parent in node.parents:
                 create_commit(parent)
 
             if node.parents:
-                self.git("checkout", self.commits[node.parents[0].i])
+                self.git("checkout", commits[node.parents[0].i])
             if len(node.parents) <= 1:
-                self.commits[node.i] = self.commit(str(node.i))
+                commits[node.i] = self.commit(str(node.i))
             else:
-                self.commits[node.i] = self.merge(*[self.commits[p.i] for p in node.parents])
+                commits[node.i] = self.merge(*[commits[p.i] for p in node.parents])
+            self.git("tag", str(node.i))
 
         for node in dag.nodes():
             create_commit(node)
+
+        self.addClassCleanup(lambda: shutil.rmtree(tmpdir))
 
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_range_split(self, dag_and_range: (Dag, (int, int))):
         (dag, (exclude_node, include_node)) = dag_and_range
         self.setup_repo(dag)
-        exclude, include = self.commits[exclude_node], self.commits[include_node]
-        rev_range = git_dissect.RevRange(exclude=[exclude], include=include)
+        rev_range = git_dissect.RevRange(exclude=[str(exclude_node)],
+                                         include=str(include_node))
         m = rev_range.midpoint()
         if not m:
             return # Range is empty
