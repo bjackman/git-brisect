@@ -443,7 +443,7 @@ class Dag:
     num_nodes: int
     edges: frozenset[tuple[int, int]] = dataclasses.field(default_factory=frozenset)
 
-    def nodes(self):
+    def nodes(self) -> list[DagNode]:
         nodes = [DagNode(i=i, parents=[]) for i in range(self.num_nodes)]
         for (parent, child) in self.edges:
             nodes[child].parents.append(nodes[parent])
@@ -555,7 +555,7 @@ class TestWithHypothesis(GitDissectTest):
         subsets_size = sum(len(s) for s in subsets)
         if subsets_size < len(superset):
             raise RuntimeError("errrrrrrr ummmmmm bug in the test logic!")
-        if subsets_size > len(supersets):
+        if subsets_size > len(superset):
             raise AssertionError(
                 "Subsets not a partition of the superset: Some of the subsets overlap")
 

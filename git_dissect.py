@@ -321,7 +321,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(rev_range, args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     tmpdir = None
     if use_worktrees:
         tmpdir = tempfile.mkdtemp()
