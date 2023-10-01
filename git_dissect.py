@@ -140,7 +140,7 @@ class RevRange:
 
         Produces a "before" subrange that is the input commit and all of its
         ancestors within this range, and an "after" subrange that is the
-        complement of that, excluding the input commit.
+        complement of that.
         """
         if commit not in self.commits():
             # Actually we could just return self and an empty range. But since
