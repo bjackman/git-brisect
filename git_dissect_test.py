@@ -590,6 +590,8 @@ class TestWithHypothesis(GitDissectTest):
         self.assertEqual(subsets_size, len(superset))
 
     @hypothesis.given(dag_and_range=with_node_range(dags()))
+    @hypothesis.example((Dag(num_nodes=4, edges=frozenset({(0, 1), (0, 2), (2, 3), (1, 3)})),
+                         (2, 3)))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_range_split(self, dag_and_range: tuple[Dag, tuple[int, int]]):
         (dag, (exclude_node, include_node)) = dag_and_range
@@ -608,6 +610,7 @@ class TestWithHypothesis(GitDissectTest):
                                       rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
     @hypothesis.given(dag_node_leaf=with_node_and_reachable_leaf(dags()))
+    @hypothesis.example((Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])), 2, 3))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_bisect(self, dag_node_leaf: tuple[Dag, int, int]):
         logging.debug(dag_node_leaf)
