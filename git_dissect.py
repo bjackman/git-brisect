@@ -45,6 +45,10 @@ def rev_parse(rev):
 def rev_list(spec):
     return run_cmd(["git", "rev-list", spec]).splitlines()
 
+def list_parents(rev):
+    results = run_cmd(["git", "rev-list", "--parents", "-n", "1", rev]).strip()
+    return results.split(" ")[1:]  # First item is @rev.
+
 def merge_base(*commits):
     if len(commits) == 1:
         return commits
@@ -153,18 +157,27 @@ class RevRange:
         return before, after
 
     def drop_include(self) -> list[RevRange]:
-        """Return subranges of this range, without @include
+        """Return disjoint subranges of this range, without @include
 
-        Returns one subrange for each of @include's parents. The union of the
-        subranges is this range plus @include. The intersection is empty.
+        Returns one subrange for each of @include's parents. These subranges are
+        a partition of this range, minus its @include.
         """
         # Note - If we have an efficient implementation of this algorithm, I
         # think we can drop the "one include" restriction.
-        parents = rev_list(self.include + "^")
+        parents = list_parents(self.include)
         ret = []
-        for i, p in enumerate(parents):
+
+        # @parents generally have overlapping ancestors - do some merge-base
+        # trickery to get disjoint subranges. I had a hard time coming up with
+        # this, if it looks wrong it might be. Basically this felt like it might
+        # work and when I tried it out on paper it worked. Then instead of
+        # managing to really underestand it I just wrote that whole
+        # galaxy-brained Hypothesis-based test suite, really just to see if this
+        # worked. So, only trust this code to the extent you trust the tests.
+        for i, parent in enumerate(parents):
             prior_parents = [parents[p] for p in range(i)]
-            ret.append(RevRange(exclude=self.exclude + prior_parents, include=p))
+            merge_bases = [merge_base(parent, prior) for prior in prior_parents]
+            ret.append(RevRange(exclude=self.exclude + merge_bases, include=parent))
         return ret
 
 class WorkerPool:
