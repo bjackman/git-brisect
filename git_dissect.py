@@ -17,6 +17,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import typing
 import queue
 import shutil
 import sys
@@ -58,7 +59,7 @@ class RevRange:
     # git's lead. I thik this would probably be obvious if you tried to
     # implement this algorithm in a way where both ends of the range can be
     # plural?
-    def __init__(self, exclude: Iterable[str], include: str):
+    def __init__(self, exclude: list[str], include: str):
         self.exclude = exclude
         self.include = include
 
@@ -120,15 +121,16 @@ class RevRange:
             self._midpoint = commits_by_distance[0]
         self._commits = set(commits_by_distance)
 
-    def midpoint(self) -> str:
+    def midpoint(self) -> Optional[str]:
         self._get_commits()
         return self._midpoint
 
     def commits(self) -> set[str]:
         self._get_commits()
-        return self._commits
+        # Type checker can't tell this is no longer optional.
+        return typing.cast(set[str], self._commits)
 
-    def split(self, commit: str) -> (RevRange, RevRange):
+    def split(self, commit: str) -> tuple[RevRange, RevRange]:
         """Split into two disjoint subranges at the given commit.
 
         Produces a "before" subrange that is the input commit and all of its
@@ -149,7 +151,7 @@ class RevRange:
         after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
         return before, after
 
-    def drop_include(self) -> [RevRange]:
+    def drop_include(self) -> list[RevRange]:
         """Return subranges of this range, without @include
 
         Returns one subrange for each of @include's parents. The union of the
@@ -157,7 +159,7 @@ class RevRange:
         """
         # Note - If we have an efficient implementation of this algorithm, I
         # think we can drop the "one include" restriction.
-        parents = rev_list(commit + "^")
+        parents = rev_list(self.include + "^")
         ret = []
         for i, p in enumerate(parents):
             prior_parents = [p for p in range(i)]
@@ -314,7 +316,7 @@ def do_dissect(args, pool, full_range):
     return rev_parse(full_range.include)
 
 def excepthook(*args, **kwargs):
-    threading.__excepthook__(*args, **kwargs)
+    threading.__excepthook__(*args, **kwargs)  # pytype: disable=module-attr
     # Not sure exactly why sys.exit doesn't work here. This is cargo-culted from:
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
@@ -354,7 +356,7 @@ def do_test_every_commit(pool, commits):
     return results
 
 # include and exclude specify the set of commits to test.
-def test_every_commit(rev_range: str, args: [str],
+def test_every_commit(rev_range: str, args: Iterable[str],
                       num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     commits = RevRange.from_string(rev_range).commits()
     tmpdir = None
@@ -430,22 +432,22 @@ if __name__ == "__main__":
     threading.excepthook = excepthook
 
     args = parse_args()
-    was_in_bisect = in_bisect()
+    was_in_bisect = True  # TODO lol
     if args.test_every_commit:
         if not args.start:
             print("--start is required with --test-every-commit")
             sys.exit(1)
 
-        # TODO: Cleanup the way we specify the range to test, more like git rev-list.
-        results = test_every_commit(
-            args.cmd, include=[args.end or "HEAD"], exclude=[args.start + "^"],
-            num_threads=args.num_threads,
-            use_worktrees=not args.no_worktrees,
-            cleanup_worktrees=(not args.no_worktrees and
-                    not args.no_cleanup_worktrees))
-        # TODO: Print these as a range summary, or more like in a commit graph at least
-        for commit, exit_code in results:
-            print(commit + ": exit code was " + str(exit_code))
+        # TODO: run test_every_commit
+        # results = test_every_commit(
+        #     args.cmd, # TODO args lol
+        #     num_threads=args.num_threads,
+        #     use_worktrees=not args.no_worktrees,
+        #     cleanup_worktrees=(not args.no_worktrees and
+        #             not args.no_cleanup_worktrees))
+        # # TODO: Print these as a range summary, or more like in a commit graph at least
+        # for commit, exit_code in results:
+        #     print(commit + ": exit code was " + str(exit_code))
     else:
         try:
             if not was_in_bisect:
@@ -454,8 +456,8 @@ if __name__ == "__main__":
                 run_cmd(["git", "bisect", "good", args.start])
             if args.end:
                 run_cmd(["git", "bisect", "bad", args.to])
-            if "refs/bisect/bad" not in all_refs():
-                run_cmd(["git", "bisect", "bad"])
+            # if "refs/bisect/bad" not in all_refs():
+            #     run_cmd(["git", "bisect", "bad"])
             rev_range = "refs/bisect/good..refs/bisect/bad" # TODO
             result = dissect(rev_range, args.cmd,
                              num_threads=args.num_threads,

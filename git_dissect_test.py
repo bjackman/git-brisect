@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+from __future__ import annotations
 
 import dataclasses
 import datetime
@@ -432,13 +433,13 @@ class DagNode:
     # Non-negative identifier for the node. Nodes with smaller IDs are never
     # reachable from nodes with larger IDs.
     i: int
-    parents: ["DagNode"]
+    parents: list[DagNode]
 
 @dataclasses.dataclass(frozen=True)
 class Dag:
     """DAG represented as a set of edges"""
     num_nodes: int
-    edges: frozenset((int, int)) = dataclasses.field(default_factory=frozenset)
+    edges: frozenset[tuple[int, int]] = dataclasses.field(default_factory=frozenset)
 
     def nodes(self):
         nodes = [DagNode(i=i, parents=[]) for i in range(self.num_nodes)]
@@ -542,7 +543,7 @@ class TestWithHypothesis(GitDissectTest):
 
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
-    def test_range_split(self, dag_and_range: (Dag, (int, int))):
+    def test_range_split(self, dag_and_range: tuple[Dag, tuple[int, int]]):
         (dag, (exclude_node, include_node)) = dag_and_range
         self.setup_repo(dag)
         rev_range = git_dissect.RevRange(exclude=[str(exclude_node)],
