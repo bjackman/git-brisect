@@ -13,6 +13,8 @@ import tempfile
 import time
 import threading
 
+from typing import Iterable
+
 import hypothesis
 
 import git_dissect
@@ -541,6 +543,22 @@ class TestWithHypothesis(GitDissectTest):
 
         self.addClassCleanup(lambda: shutil.rmtree(tmpdir))
 
+    def assertSetPartition(self, subsets: Iterable[set], superset: set):
+        subsets = list(subsets)
+        subset_union = set().union(*subsets)
+        if subset_union != superset:
+            raise AssertionError(
+                "Subsets not a partition of the superset: " +
+                f"Union of {len(subsets)} subsets is not the superset\n" +
+                f"In subsets but not superset: {subset_union - superset}\n" +
+                f"In superset but not in subsets: {superset - subset_union}")
+        subsets_size = sum(len(s) for s in subsets)
+        if subsets_size < len(superset):
+            raise RuntimeError("errrrrrrr ummmmmm bug in the test logic!")
+        if subsets_size > len(supersets):
+            raise AssertionError(
+                "Subsets not a partition of the superset: Some of the subsets overlap")
+
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_range_split(self, dag_and_range: tuple[Dag, tuple[int, int]]):
@@ -552,7 +570,12 @@ class TestWithHypothesis(GitDissectTest):
         if not m:
             return # Range is empty
         before, after = rev_range.split(m)
-        self.assertEqual(len(before.commits()) + len(after.commits()), len(rev_range.commits()))
+        self.assertSetPartition((before.commits(), after.commits()), rev_range.commits())
+
+        # Same for dropping the tip of the range.
+        subranges = rev_range.drop_include()
+        self.assertSetPartition((s.commits() for s in subranges),
+                                rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
 
 if __name__ == "__main__":
