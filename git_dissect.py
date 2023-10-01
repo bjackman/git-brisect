@@ -67,7 +67,7 @@ class RevRange:
     # implement this algorithm in a way where both ends of the range can be
     # plural?
     def __init__(self, exclude: list[str], include: str):
-        self.exclude = exclude
+        self.exclude = list(set(exclude))
         self.include = include
 
         self._commits: Optional[set[str]] = None
