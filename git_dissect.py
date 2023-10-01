@@ -162,7 +162,7 @@ class RevRange:
         parents = rev_list(self.include + "^")
         ret = []
         for i, p in enumerate(parents):
-            prior_parents = [p for p in range(i)]
+            prior_parents = [parents[p] for p in range(i)]
             ret.append(RevRange(exclude=self.exclude + prior_parents, include=p))
         return ret
 
