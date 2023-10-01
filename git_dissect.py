@@ -289,7 +289,8 @@ def do_dissect(args, pool, full_range):
                 continue
 
             # Start testing the midpoint, then split the r into subranges,
-            # we'll process them later. pool.enqueue(r.midpoint())
+            # we'll process them later.
+            pool.enqueue(r.midpoint())
             subranges += r.split(r.midpoint())
 
             # The commit we'll learn most by testing is the midpoint of the
