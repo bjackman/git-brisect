@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 
+import dataclasses
+import datetime
 import logging
 import unittest
 import os
@@ -9,6 +11,8 @@ import sys
 import tempfile
 import time
 import threading
+
+import hypothesis
 
 import git_dissect
 
@@ -42,6 +46,10 @@ class GitDissectTest(unittest.TestCase):
             self.commit_counter += 1
         self.git("commit", "--allow-empty", "-m", msg)
         return self.git("rev-parse", "HEAD")
+
+    def merge(self, *parents):
+        self.git("merge", "--no-edit", *parents)
+        return self.git("rev-pase", "HEAD")
 
     def write_executable(self, path, content):
         """Write an executable and git add it"""
@@ -112,8 +120,7 @@ class TestBisection(GitDissectTest):
         good1 = self.commit("good1")
         self.git("checkout", base)
         good2 = self.commit("good2")
-        self.git("merge", "--no-edit", good1)
-        merge = self.git("rev-parse", "HEAD")
+        merge = self.merge(good1)
         self.write_pass_fail_script(fail=True)
         want = self.commit("want")
         bad = self.commit("bad")
@@ -135,7 +142,7 @@ class TestBisection(GitDissectTest):
         want = self.commit("want")
         also_test = self.commit("also_test")
         self.git("checkout", other)
-        self.git("merge", "--no-edit", also_test)
+        self.merge(also_test)
         bad = self.commit("bad")
 
         self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
@@ -417,6 +424,116 @@ class TestRevRange(GitDissectTest):
 
         with self.assertRaises(git_dissect.BadRangeError):
             _ = git_dissect.RevRange.from_string("foo..bar baz")
+
+
+@dataclasses.dataclass
+class DagNode:
+    """DAG represented as a recursive structure"""
+    # Non-negative identifier for the node. Nodes with smaller IDs are never
+    # reachable from nodes with larger IDs.
+    i: int
+    parents: ["DagNode"]
+
+@dataclasses.dataclass
+class Dag:
+    """DAG represented as a set of edges"""
+    num_nodes: int
+    edges: set((int, int)) = dataclasses.field(default_factory=set)
+
+    def nodes(self):
+        nodes = [DagNode(i=i, parents=[]) for i in range(self.num_nodes)]
+        for (parent, child) in self.edges:
+            nodes[child].parents.append(nodes[parent])
+        return nodes
+
+def uints_upto(n):
+    return hypothesis.strategies.integers(min_value=0, max_value=n)
+
+# Produces (i, j) where 0 <= i < j <= max_value
+def distinct_sorted_uint_pairs(max_value: int) -> hypothesis.strategies.SearchStrategy:
+    if max_value < 1:
+        # hypothesis.strategies.integers would raise an exception due to
+        # min_value>max_value.
+        return hypothesis.strategies.nothing()
+    return (
+        uints_upto(max_value - 1)
+        .flatmap(lambda n: hypothesis.strategies.tuples(
+            hypothesis.strategies.just(n),
+            hypothesis.strategies.integers(min_value=n+1, max_value=max_value)))
+    )
+
+# Strategy that takes input Dags and returns Dags that have the same set of
+# nodes and one additional edge.
+@hypothesis.strategies.composite
+def with_additional_edge(draw, children):
+    child = draw(children)
+    new_edge = draw(
+        # Edges must only go from "smaller" to "larger" nodes to maintain acyclicity.
+        distinct_sorted_uint_pairs(max_value=child.num_nodes-1)
+        .filter(lambda e: e not in child.edges)  # Drop duplicates
+    )
+    return Dag(num_nodes=child.num_nodes, edges=child.edges.union({new_edge}))
+
+# Strategy that takes input Dags and returns Dags with one additional node,
+# and an edge leading to that new node from one of the existing nodes.
+@hypothesis.strategies.composite
+def with_additional_node(draw, children):
+    child = draw(children)
+    new_node = child.num_nodes
+    from_node = draw(uints_upto(child.num_nodes - 1))
+    return Dag(num_nodes=child.num_nodes + 1, edges=child.edges.union({(from_node, new_node)}))
+
+# Strategy that generates arbitrary DAGs.
+dags = lambda: hypothesis.strategies.recursive(
+    hypothesis.strategies.just(Dag(num_nodes=1)),
+    lambda children: with_additional_edge(children) | with_additional_node(children))
+
+# Strategy that generates a DAG and a pair of ("smaller", "larger") node IDs
+# within that DAG.
+@hypothesis.strategies.composite
+def with_node_range(draw, dags):
+    dag = draw(dags.filter(lambda d: d.num_nodes > 1))
+    return (dag, draw(distinct_sorted_uint_pairs(max_value=dag.num_nodes-1)))
+
+class TestWithHypothesis(GitDissectTest):
+    # TODO: Cache repos instead of creating them every time?
+    def setup_repo(self, dag):
+        self.commits = {}  # Maps DagNode.i to commit hash
+        def create_commit(node: DagNode):
+            if node.i in self.commits:
+                return
+
+            if len(node.parents) == 0:
+                # This is the "root" of the history. In this code we always have
+                # exactly one of these - check that.
+                self.assertEqual(len(self.commits), 0)
+
+            for parent in node.parents:
+                create_commit(parent)
+
+            if node.parents:
+                self.git("checkout", self.commits[node.parents[0].i])
+            if len(node.parents) <= 1:
+                self.commits[node.i] = self.commit(str(node.i))
+            else:
+                self.commits[node.i] = self.merge(*[self.commits[p.i] for p in node.parents])
+
+        for node in dag.nodes():
+            create_commit(node)
+
+    @hypothesis.given(dag_and_range=with_node_range(dags()))
+    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
+    def test_range_split(self, dag_and_range: (Dag, (int, int))):
+        (dag, (exclude_node, include_node)) = dag_and_range
+        self.setup_repo(dag)
+        exclude, include = self.commits[exclude_node], self.commits[include_node]
+        rev_range = git_dissect.RevRange(exclude=[exclude], include=include)
+        m = rev_range.midpoint()
+        if not m:
+            return # Range is empty
+        before, after = rev_range.split(m)
+        self.assertEqual(len(before.commits()) + len(after.commits()), len(rev_range.commits()))
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
