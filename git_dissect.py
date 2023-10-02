@@ -145,7 +145,7 @@ class RevRange:
         if commit not in self.commits():
             # Actually we could just return self and an empty range. But since
             # we don't expect to need this, we just fail at the moment.
-            raise RuntimeError(f"{commit} not in {self}")
+            raise RuntimeError(f"{describe(commit)} not in {self}")
 
         before = RevRange(exclude=self.exclude, include=commit)
         # To ensure the two subranges are non-overlapping, exclude their common
