@@ -250,7 +250,7 @@ class WorkerPool:
                     run_cmd(["git", "-C", workdir, "clean", "-fdx"])
                 try:
                     p = subprocess.Popen(
-                        self._test_cmd, cwd=workdir, shell=True,
+                        self._test_cmd, cwd=workdir,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 except (PermissionError, FileNotFoundError) as e:
                     logging.info(f"Error running at {rev} ({e}), returning code 1")
