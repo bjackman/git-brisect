@@ -623,7 +623,7 @@ class TestWithHypothesis(GitDissectTest):
         # commits to be their own ancestor); if it is then HEAD is "broken".
         result = git_dissect.dissect(
             rev_range=range_spec,
-            args=["bash", "-c", "!", "git", "merge-base", "--is-ancestor", str(culprit_node_id), str(leaf_id)])
+            args=["bash", "-c", f"! git merge-base --is-ancestor {culprit_node_id} HEAD"])
         self.assertEqual(self.describe(result), str(culprit_node_id))
 
     # TODO: test multiple "good" that are not the root of the repo
