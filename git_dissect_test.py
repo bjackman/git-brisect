@@ -614,6 +614,7 @@ class TestWithHypothesis(GitDissectTest):
     @hypothesis.example((Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])), 2, 3))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_bisect(self, dag_node_leaf: tuple[Dag, int, int]):
+        self.logger.info(f"Running {dag_node_leaf}")
         dag, culprit_node_id, leaf_id = dag_node_leaf
         self.setup_repo(dag)
         # Bisect the range consisting of all the ancestors of the leaf node.
