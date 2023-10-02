@@ -313,14 +313,16 @@ def do_dissect(args, pool, full_range):
             subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
-        if returncode == 0:  # Commits before are now known-good.
-            (cancel, full_range) = full_range.split(result_commit)
-        else:                # Commits after are now known-bad.
-            (full_range, cancel) = full_range.split(result_commit)
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
-        logger.info(f"    Canceling {cancel}, remaining: {full_range}")
 
+        if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
+            (cancel, full_range) = full_range.split(result_commit)
+        else:                # This commit or one of its ancestors is a culprit.
+            (full_range, cancel) = full_range.split(result_commit)
+
+        logger.info(f"    Canceling {cancel}, remaining: {full_range}")
         pool.cancel(cancel)
+
         # Abort ongoing tests to free up threads.
         # Drop known-* commits from future testing. subranges are either subsets
         # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
