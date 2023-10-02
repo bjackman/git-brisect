@@ -66,9 +66,9 @@ class RevRange:
     # git's lead. I thik this would probably be obvious if you tried to
     # implement this algorithm in a way where both ends of the range can be
     # plural?
-    def __init__(self, exclude: list[str], include: str):
+    def __init__(self, exclude: list[str], include: list[str]):
         self.exclude = list(set(exclude))
-        self.include = include
+        self.include = list(set(include)
 
         self._commits: Optional[set[str]] = None
         self._midpoint: Optional[str] = None
@@ -99,13 +99,7 @@ class RevRange:
                 include.append(part)
         if len(include) == 0:
             raise BadRangeError(f"No commits included in range {s}")
-        if len(include) > 1:
-            # I don't realy know why this restriction exists; it would
-            # complicate the implementation in some nontrivial ways but I
-            # feel it could be done. Would be interesting to find out why
-            # the normal git-bisect doesn't allow it.
-            raise BadRangeError(f"Can't dissect with multiple tip revs: {' '.join(include)}")
-        return cls(exclude=exclude, include=include[0])
+        return cls(exclude=exclude, include=include)
 
     def __str__(self):
         return "RevRange([%s %s] %d commits)" % (
@@ -118,7 +112,7 @@ class RevRange:
         # Find commits in range, sorted by descending distance to nearest
         # endpoint.
         args =  (["git", "rev-list", "--bisect-all"] +
-                 [self.include] + ["^" + r for r in self.exclude])
+                 self.include + ["^" + r for r in self.exclude])
         out = run_cmd(args)
         commits_by_distance = [l.split(" ")[0] for l in out.splitlines()]
 
@@ -138,26 +132,26 @@ class RevRange:
     def split(self, commit: str) -> tuple[RevRange, RevRange]:
         """Split into two disjoint subranges at the given commit.
 
-        Produces a "before" subrange that is the input commit and all of its
-        ancestors within this range, and an "after" subrange that is the
-        complement of that.
+        Produces a "before" subrange that is all the ancestors of the input
+        commit within this range, and an "after" subrange that is the complement
+        of that, excluding the input commit. Note that if this range has
+        multiple @include commits, commits in the "after" subrange are not
+        necessarily descendants of the input commit.
         """
         if commit not in self.commits():
             # Actually we could just return self and an empty range. But since
             # we don't expect to need this, we just fail at the moment.
             raise RuntimeError(f"{commit} not in {self}")
 
-        before = RevRange(exclude=self.exclude, include=commit)
-        # To ensure the two subranges are non-overlapping, exclude their common
-        # ancestor. ACTUALLY, is there a bug here? We generate two ranges with
-        # no gap between them; normally a gap between ranges represents some
-        # knowledge that we have, but not here.
-        mb = merge_base(self.include, commit)
-        after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
-        return before, after
+        before = RevRange(exclude=self.exclude, include=list_parents(commit))
+        # Something that I didn't realise at first: excluding a commit from a
+        # range excludes all of its ancestors, even if the commit itself is not
+        # in the range. At first I did merge-base trickery to achieve this but
+        # it's not necessary.
+        after = RevRange(exclude=self.exclude + [commit], include=self.include)
 
-    def drop_include(self) -> list[RevRange]:
-        """Return disjoint subranges of this range, without @include
+    def drop_include(self) -> RevRange:
+        """Return
 
         Returns one subrange for each of @include's parents. These subranges are
         a partition of this range, minus its @include.
@@ -287,7 +281,7 @@ def do_dissect(args, pool, full_range):
     # Non-overlapping ranges of commits that we haven't yet kicked off tests
     # for, and which haven't been excluded from full_range.
     subranges = [full_range]
-    while len(full_range.commits()):
+    while len(full_range.commits() > 1):
         # Start as many worker threads as possible, unless there's a result
         # pending; that will influence which commits we need to test so there's
         # po point in adding new ones until we've processed it. Here we do a
