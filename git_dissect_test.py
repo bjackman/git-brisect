@@ -610,6 +610,7 @@ class TestWithHypothesis(GitDissectTest):
                                       rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
     @hypothesis.given(dag_node_leaf=with_node_and_reachable_leaf(dags()))
+    @hypothesis.example((Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})), 2, 2))
     @hypothesis.example((Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])), 2, 3))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_bisect(self, dag_node_leaf: tuple[Dag, int, int]):
