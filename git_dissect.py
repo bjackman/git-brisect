@@ -287,7 +287,7 @@ def do_dissect(args, pool, full_range):
     # Non-overlapping ranges of commits that we haven't yet kicked off tests
     # for, and which haven't been excluded from full_range.
     subranges = [full_range]
-    while len(full_range.commits()):
+    while len(full_range.commits()) > 1:
         # Start as many worker threads as possible, unless there's a result
         # pending; that will influence which commits we need to test so there's
         # po point in adding new ones until we've processed it. Here we do a
