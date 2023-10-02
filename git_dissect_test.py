@@ -561,7 +561,7 @@ class TestWithHypothesis(GitDissectTest):
             if len(node.parents) <= 1:
                 commits[node.i] = self.commit(str(node.i))
             else:
-                commits[node.i] = self.merge(*[commits[p.i] for p in node.parents])
+                commits[node.i] = self.merge("--no-ff", *[commits[p.i] for p in node.parents])
             self.git("tag", str(node.i))
 
         for node in dag.nodes():
