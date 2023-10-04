@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+from __future__ import annotations
 
 """
 Usage:
@@ -16,6 +17,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import typing
 import queue
 import shutil
 import sys
@@ -37,14 +39,23 @@ def run_cmd(args: list[str]) -> str:
             f'Stderr:\n{result.stderr.decode()}\nStdout:\n{result.stdout.decode()}')
     return result.stdout.decode()
 
-def all_refs() -> list[str]:
-    return (l.split(" ")[1] for l in run_cmd(["git", "show-ref"]).splitlines())
-
 def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
 
+def rev_list(spec):
+    return run_cmd(["git", "rev-list", spec]).splitlines()
+
+def list_parents(rev):
+    results = run_cmd(["git", "rev-list", "--parents", "-n", "1", rev]).strip()
+    return results.split(" ")[1:]  # First item is @rev.
+
 def merge_base(*commits):
+    if len(commits) == 1:
+        return commits
     return run_cmd(["git", "merge-base"] + list(commits)).strip()
+
+def describe(rev):
+    return run_cmd(["git", "describe", "--tags", "--always", rev]).strip()
 
 class BadRangeError(Exception):
     pass
@@ -55,8 +66,8 @@ class RevRange:
     # git's lead. I thik this would probably be obvious if you tried to
     # implement this algorithm in a way where both ends of the range can be
     # plural?
-    def __init__(self, exclude: Iterable[str], include: str):
-        self.exclude = exclude
+    def __init__(self, exclude: list[str], include: str):
+        self.exclude = list(set(exclude))
         self.include = include
 
         self._commits: Optional[set[str]] = None
@@ -97,11 +108,8 @@ class RevRange:
         return cls(exclude=exclude, include=include[0])
 
     def __str__(self):
-        return "RevRange([%s] %d commits)" % (self._spec(), len(self.commits()))
-
-    def _spec(self):
-        """Args to be passed to git rev-list to describe the range"""
-        return [self.include] + ["^" + r for r in self.exclude]
+        return "RevRange([%s %s] %d commits)" % (
+            describe(self.include), " ".join("^" + describe(e) for e in self.exclude), len(self.commits()))
 
     def _get_commits(self):
         if self._commits is not None:
@@ -109,7 +117,8 @@ class RevRange:
 
         # Find commits in range, sorted by descending distance to nearest
         # endpoint.
-        args =  ["git", "rev-list", "--bisect-all"] + self._spec()
+        args =  (["git", "rev-list", "--bisect-all"] +
+                 [self.include] + ["^" + r for r in self.exclude])
         out = run_cmd(args)
         commits_by_distance = [l.split(" ")[0] for l in out.splitlines()]
 
@@ -117,13 +126,59 @@ class RevRange:
             self._midpoint = commits_by_distance[0]
         self._commits = set(commits_by_distance)
 
-    def midpoint(self) -> str:
+    def midpoint(self) -> Optional[str]:
         self._get_commits()
         return self._midpoint
 
     def commits(self) -> set[str]:
         self._get_commits()
-        return self._commits
+        # Type checker can't tell this is no longer optional.
+        return typing.cast(set[str], self._commits)
+
+    def split(self, commit: str) -> tuple[RevRange, RevRange]:
+        """Split into two disjoint subranges at the given commit.
+
+        Produces a "before" subrange that is the input commit and all of its
+        ancestors within this range, and an "after" subrange that is the
+        complement of that.
+        """
+        if commit not in self.commits():
+            # Actually we could just return self and an empty range. But since
+            # we don't expect to need this, we just fail at the moment.
+            raise RuntimeError(f"{describe(commit)} not in {self}")
+
+        before = RevRange(exclude=self.exclude, include=commit)
+        # To ensure the two subranges are non-overlapping, exclude their common
+        # ancestor. ACTUALLY, is there a bug here? We generate two ranges with
+        # no gap between them; normally a gap between ranges represents some
+        # knowledge that we have, but not here.
+        mb = merge_base(self.include, commit)
+        after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
+        return before, after
+
+    def drop_include(self) -> list[RevRange]:
+        """Return disjoint subranges of this range, without @include
+
+        Returns one subrange for each of @include's parents. These subranges are
+        a partition of this range, minus its @include.
+        """
+        # Note - If we have an efficient implementation of this algorithm, I
+        # think we can drop the "one include" restriction.
+        parents = list_parents(self.include)
+        ret = []
+
+        # @parents generally have overlapping ancestors - do some merge-base
+        # trickery to get disjoint subranges. I had a hard time coming up with
+        # this, if it looks wrong it might be. Basically this felt like it might
+        # work and when I tried it out on paper it worked. Then instead of
+        # managing to really underestand it I just wrote that whole
+        # galaxy-brained Hypothesis-based test suite, really just to see if this
+        # worked. So, only trust this code to the extent you trust the tests.
+        for i, parent in enumerate(parents):
+            prior_parents = [parents[p] for p in range(i)]
+            merge_bases = [merge_base(parent, prior) for prior in prior_parents]
+            ret.append(RevRange(exclude=self.exclude + merge_bases, include=parent))
+        return ret
 
 class WorkerPool:
     # Note that there really shouldn't be any need for multi-threading here, we
@@ -158,7 +213,7 @@ class WorkerPool:
     def enqueue(self, rev):
         with self._cond:
             self._in_q.append(rev)
-            logger.info(f"Enqueued {rev}, new queue depth {len(self._in_q)}")
+            logger.info(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
             # TODO: Because we use the same condition variable for input and
             # output, we need notify_all. Rework this to avoid that.
             self._cond.notify_all()
@@ -229,8 +284,8 @@ class WorkerPool:
             t.join()
 
 def do_dissect(args, pool, full_range):
-    # Subranges between commits that we've kicked off tests for. Used to
-    # prioritise commits for testing.
+    # Non-overlapping ranges of commits that we haven't yet kicked off tests
+    # for, and which haven't been excluded from full_range.
     subranges = [full_range]
     while len(full_range.commits()) > 1:
         # Start as many worker threads as possible, unless there's a result
@@ -246,59 +301,46 @@ def do_dissect(args, pool, full_range):
             r = subranges.pop(0)
             if not r.commits():
                 continue
-            midpoint = r.midpoint()
-            pool.enqueue(midpoint)
 
-            # The midpoint divided the range into two subranges, add them to the
-            #
-            # TODO: The two ranges we generate here can overlap. This can lead
-            # to us trying to test the same commit twice, or generally just
-            # picking commits sub-optimally. Should find a way to drop the
-            # common commits from one of the ranges. I think maybe git
-            # merge-base could work here?
-            after = RevRange(exclude=r.exclude, include=midpoint + "^")
-            before = RevRange(exclude=r.exclude + [midpoint], include=r.include)
-            subranges += [before, after]
+            # Start testing the midpoint, then split the r into subranges,
+            # we'll process them later.
+            pool.enqueue(r.midpoint())
+            subranges += r.split(r.midpoint())
+
+            # The commit we'll learn most by testing is the midpoint of the
+            # largest remaining subrange. Sorting by size makes this a sort of
+            # hill-climbing search. subranges = sorted(subranges, key=lambda r:
+            subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
-        if returncode == 0:
-            # We'll cancel all the tests of commits that are about to be
-            # subsumed by the refs/bisect/good* ref we add.
-            cancel = RevRange(exclude=full_range.exclude, include=result_commit)
-            # Now update full_range to exclude the known-good commits
-            full_range = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
-        else:
-            # We'll cancel everything that isn't an ancestor of the new bad commit.
-            cancel = RevRange(exclude=full_range.exclude + [result_commit], include=full_range.include)
-            # Now update full_range to exclude the known-bad commits
-            full_range = RevRange(exclude=full_range.exclude, include=result_commit)
+        if result_commit not in full_range.commits():
+            continue  # We cancelld this one - result is not interesting or meaningful.
+        logger.info(f"Got result {returncode} for {describe(result_commit)}")
 
-        # TODO: clean up multiple returns rofl.
-        if len(full_range.commits()) == 0:
-            return result_commit
+        if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
+            (cancel, full_range) = full_range.split(result_commit)
+        else:                # This commit or one of its ancestors is a culprit.
+            (full_range, cancel) = full_range.split(result_commit)
 
-        logger.info("%s result was %d, cancelling %s", result_commit, returncode, cancel)
+        logger.info(f"    Canceling {cancel}, remaining: {full_range}")
         pool.cancel(cancel)
 
-        # Update all the ranges we need to consider testing.
-        new_ranges = []
-        for r in subranges:
-            if returncode == 0:
-                new_ranges.append(RevRange(exclude=r.exclude + [result_commit], include=r.include))
-            else:
-                new_ranges.append(RevRange(exclude=r.exclude, include=result_commit))
-        # Sort by size of the range - this is like a best-first search.
-        subranges = sorted(new_ranges, key=lambda r: len(r.commits()), reverse=True)
+        # Abort ongoing tests to free up threads.
+        # Drop known-* commits from future testing. subranges are either subsets
+        # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
+        # off a test for a commit within it, in which case we should have split
+        # it up).
+        subranges = [s for s in subranges if s.midpoint() in full_range.commits()]
 
-    return full_range.midpoint()
+    return rev_parse(full_range.include)
 
 def excepthook(*args, **kwargs):
-    threading.__excepthook__(*args, **kwargs)
+    threading.__excepthook__(*args, **kwargs)  # pytype: disable=module-attr
     # Not sure exactly why sys.exit doesn't work here. This is cargo-culted from:
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(rev_range, args, num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     tmpdir = None
     if use_worktrees:
         tmpdir = tempfile.mkdtemp()
@@ -333,7 +375,7 @@ def do_test_every_commit(pool, commits):
     return results
 
 # include and exclude specify the set of commits to test.
-def test_every_commit(rev_range: str, args: [str],
+def test_every_commit(rev_range: str, args: Iterable[str],
                       num_threads=8, use_worktrees=True, cleanup_worktrees=False):
     commits = RevRange.from_string(rev_range).commits()
     tmpdir = None
@@ -409,22 +451,22 @@ if __name__ == "__main__":
     threading.excepthook = excepthook
 
     args = parse_args()
-    was_in_bisect = in_bisect()
+    was_in_bisect = True  # TODO lol
     if args.test_every_commit:
         if not args.start:
             print("--start is required with --test-every-commit")
             sys.exit(1)
 
-        # TODO: Cleanup the way we specify the range to test, more like git rev-list.
-        results = test_every_commit(
-            args.cmd, include=[args.end or "HEAD"], exclude=[args.start + "^"],
-            num_threads=args.num_threads,
-            use_worktrees=not args.no_worktrees,
-            cleanup_worktrees=(not args.no_worktrees and
-                    not args.no_cleanup_worktrees))
-        # TODO: Print these as a range summary, or more like in a commit graph at least
-        for commit, exit_code in results:
-            print(commit + ": exit code was " + str(exit_code))
+        # TODO: run test_every_commit
+        # results = test_every_commit(
+        #     args.cmd, # TODO args lol
+        #     num_threads=args.num_threads,
+        #     use_worktrees=not args.no_worktrees,
+        #     cleanup_worktrees=(not args.no_worktrees and
+        #             not args.no_cleanup_worktrees))
+        # # TODO: Print these as a range summary, or more like in a commit graph at least
+        # for commit, exit_code in results:
+        #     print(commit + ": exit code was " + str(exit_code))
     else:
         try:
             if not was_in_bisect:
@@ -433,8 +475,8 @@ if __name__ == "__main__":
                 run_cmd(["git", "bisect", "good", args.start])
             if args.end:
                 run_cmd(["git", "bisect", "bad", args.to])
-            if "refs/bisect/bad" not in all_refs():
-                run_cmd(["git", "bisect", "bad"])
+            # if "refs/bisect/bad" not in all_refs():
+            #     run_cmd(["git", "bisect", "bad"])
             rev_range = "refs/bisect/good..refs/bisect/bad" # TODO
             result = dissect(rev_range, args.cmd,
                              num_threads=args.num_threads,
