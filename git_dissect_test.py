@@ -501,7 +501,12 @@ def with_additional_node(draw, children):
 # Strategy that generates arbitrary DAGs.
 dags = lambda: hypothesis.strategies.recursive(
     hypothesis.strategies.just(Dag(num_nodes=1)),
-    lambda children: with_additional_edge(children) | with_additional_node(children))
+    lambda children: with_additional_edge(children) | with_additional_node(children),
+    # Suggested by the hypothesis health checker. I don't really understand what
+    # this does. I think part of the reaon this is confusing is that the
+    # "leaves" of the strategy tree are actually the roots of that DAGs we're
+    # generating? I dunno. How do I recursed graph?
+    max_leaves=200)
 
 # Strategy that generates a DAG and a pair of ("smaller", "larger") node IDs
 # within that DAG.
