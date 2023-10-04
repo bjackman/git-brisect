@@ -43,11 +43,13 @@ class GitDissectTest(unittest.TestCase):
             raise
         return res.stdout.decode().strip()
 
-    def commit(self, msg=None):
+    def commit(self, msg=None, tag=None):
         if msg is None:
             msg = f"commit {self.commit_counter}"
             self.commit_counter += 1
         self.git("commit", "--allow-empty", "-m", msg)
+        if tag is not None:
+            self.git("tag", tag)
         return self.git("rev-parse", "HEAD")
 
     def merge(self, *parents):
@@ -247,7 +249,7 @@ class TestBisection(GitDissectTest):
                 exit {"1" if i > 17 else "0"}
             """
             self.write_executable("run.sh", script)
-            commits.append(self.commit())
+            commits.append(self.commit(tag=str(i)))
 
         self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
 
