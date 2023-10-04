@@ -313,6 +313,8 @@ def do_dissect(args, pool, full_range):
             subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
+        if result_commit not in full_range.commits():
+            continue  # We cancelld this one - result is not interesting or meaningful.
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
 
         if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
