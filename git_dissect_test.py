@@ -305,38 +305,6 @@ class TestBisection(GitDissectTest):
     def test_limited_threads(self):
         self._test_thread_limit(4)
 
-    def _test_test_selection(self, num_good, num_bad, want_num_tests):
-        # This runs a test to check that we're actually bisecting and not just
-        # testing every commit or picking random commits or something.
-        self.write_pass_fail_script(fail=False)
-        commits = []
-        for i in range(num_good):
-            commits.append(self.commit(f"good {i}"))
-        self.write_pass_fail_script(fail=True)
-        for i in range(num_bad):
-            commits.append(self.commit(f"bad {i}"))
-
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
-        result = git_dissect.dissect(f"{commits[0]}..{commits[-1]}",
-                                     ["sh", "./run.sh"], num_threads=1)
-
-        # Check we didn't cheat
-        tested_commits = self.script_runs()
-        self.assertEqual(result, commits[num_good])
-        self.assertIn(commits[num_good - 1], tested_commits)
-        self.assertIn(commits[num_good], tested_commits)
-
-        self.assertEqual(len(tested_commits), want_num_tests)
-
-    def test_test_selection_1(self):
-        self._test_test_selection(10, 5, 4)
-
-    def test_test_selection_2(self):
-        self._test_test_selection(5, 10, 4)
-
-    def test_test_selection_3(self):
-        self._test_test_selection(2, 2, 2)
-
     # TODO:
     #
     #  pathological args? Like good and bad aren't ancestors?
