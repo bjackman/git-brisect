@@ -284,9 +284,17 @@ class WorkerPool:
             t.join()
 
 def do_dissect(args, pool, full_range):
-    # Non-overlapping ranges of commits that we haven't yet kicked off tests
-    # for, and which haven't been excluded from full_range.
-    subranges = [full_range]
+    # Note: a "culprit" is a commit that is bad and all of whose ancestors are
+    # good. There may actually be more than one such commit, but sometimes it's
+    # clearer to talk about "the" culprit anyway, that just means the one we're
+    # eventually gonna return.
+
+    # full_range is the range that contains the culprit. Our goal is to shrink
+    # it until it contains only one commit, which must be the culprit.
+    # untested_ranges contains non-overlapping ranges of commits that we haven't
+    # yet kicked off tests for. The tip commit has already been tested (as bad)
+    # by the user, hence drop_include().
+    untested_ranges = full_range.drop_include()
     while len(full_range.commits()) > 1:
         # Start as many worker threads as possible, unless there's a result
         # pending; that will influence which commits we need to test so there's
@@ -297,20 +305,21 @@ def do_dissect(args, pool, full_range):
         # we test. But I can't think of such an algorithm; this one is easy to
         # implement, still kinda fun, and produces not completely insane
         # behaviour.
-        while subranges and pool.num_pending() < pool.num_threads and not pool.out_q_length():
-            r = subranges.pop(0)
+        while untested_ranges and pool.num_pending() < pool.num_threads and not pool.out_q_length():
+            r = untested_ranges.pop(0)
             if not r.commits():
                 continue
 
-            # Start testing the midpoint, then split the r into subranges,
-            # we'll process them later.
+            # Kick off a test
             pool.enqueue(r.midpoint())
-            subranges += r.split(r.midpoint())
+            before, after = r.split(r.midpoint())
+            untested_ranges += before.drop_include()
+            untested_ranges.append(after)
 
             # The commit we'll learn most by testing is the midpoint of the
             # largest remaining subrange. Sorting by size makes this a sort of
             # hill-climbing search.
-            subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
+            untested_ranges = sorted(untested_ranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
         if result_commit not in full_range.commits():
@@ -329,7 +338,7 @@ def do_dissect(args, pool, full_range):
         # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
         # off a test for a commit within it, in which case we should have split
         # it up).
-        subranges = [s for s in subranges if s.midpoint() in full_range.commits()]
+        untested_ranges = [s for s in untested_ranges if s.midpoint() in full_range.commits()]
 
     return rev_parse(full_range.include)
 
