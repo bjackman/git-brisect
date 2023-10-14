@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 from __future__ import annotations
 
+import collections
 import dataclasses
 import datetime
 import logging
@@ -591,14 +592,28 @@ class TestWithHypothesis(GitDissectTest):
         self.setup_repo(dag)
         # Bisect the range consisting of all the ancestors of the leaf node.
         range_spec = str(leaf_id)
+
+        # tested_commits.txt will contain a line with each commit that was
+        # tested. Create it in advance to simplify the case that no tests get
+        # run.
+        tested_commits_path = f"{os.getcwd()}/tested_commits.txt"
+        with open(tested_commits_path, "w") as f:
+            pass
+        self.addCleanup(lambda: os.remove(tested_commits_path))
+
         # Simulate a bug being introduced by our culprit commit. Commits are
         # tagged by the ID of the node they are generated from. We use that tag
         # to test if the culprit is an ancestor of HEAD (this command considers
         # commits to be their own ancestor); if it is then HEAD is "broken".
-        result = git_dissect.dissect(
-            rev_range=range_spec,
-            args=["bash", "-c", f"! git merge-base --is-ancestor {culprit_node_id} HEAD"])
+        cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
+               f"! git merge-base --is-ancestor {culprit_node_id} HEAD")
+        result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd])
         self.assertEqual(self.describe(result), str(culprit_node_id))
+
+        with open(tested_commits_path) as f:
+            tested_commits = f.readlines()
+        tested_multiple = [v for v, c in collections.Counter(tested_commits).items() if c > 1]
+        self.assertFalse(tested_multiple)  # Should be empty (nothing tested twice)
 
     # TODO: test multiple "good" that are not the root of the repo
 
