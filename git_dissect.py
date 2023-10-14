@@ -325,6 +325,7 @@ def do_dissect(args, pool, full_range):
         if result_commit not in full_range.commits():
             continue  # We cancelled this one - result is not interesting or meaningful.
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
+        logger.info(f"    Considering range {full_range}")
 
         if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
             (cancel, full_range) = full_range.split(result_commit)
