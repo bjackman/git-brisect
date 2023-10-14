@@ -23,13 +23,12 @@ import git_dissect
 class GitDissectTest(unittest.TestCase):
     def setUp(self):
         self.logger = logging.getLogger(self.id())
+        self.commit_counter = 0
 
+    def setup_empty_repo(self):
         tmpdir = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
-
-        self.commit_counter = 0
-
         self.git("init")
 
     # Why does the test have a different style git wrapper function than the
@@ -91,6 +90,10 @@ class GitDissectTest(unittest.TestCase):
         return self.read_stripped_lines("output.txt")
 
 class TestBisection(GitDissectTest):
+    def setUp(self):
+        super().setUp()
+        self.setup_empty_repo()
+
     def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
         """Run a test that should result in multiple worktrees being used.
 
@@ -251,6 +254,10 @@ class TestBisection(GitDissectTest):
     #  ensure things don't break under long enqueuements
 
 class TestTestEveryCommit(GitDissectTest):
+    def setUp(self):
+        super().setUp()
+        self.setup_empty_repo()
+
     def test_smoke(self):
         self.write_pass_fail_script(fail=False)
         commits = []
@@ -438,9 +445,9 @@ class TestWithHypothesis(GitDissectTest):
     repo_cache: dict[Dag, str] = {}  # Maps DAGs to repo paths
 
     def setUp(self):
+        super().setUp()
+
         self.logger = logging.getLogger(self.id())
-        # Needed for inherited self.commit. TODO: Cleanup inheritance mess
-        self.commit_counter = 0
 
     # Sets up and switches to a repo where the history structure matches the
     # DAG. Each commit is tagged with the corresponding node's ID.
