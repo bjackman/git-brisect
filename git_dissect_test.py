@@ -25,12 +25,6 @@ class GitDissectTest(unittest.TestCase):
         self.logger = logging.getLogger(self.id())
         self.commit_counter = 0
 
-    def setup_empty_repo(self):
-        tmpdir = tempfile.mkdtemp()
-        self.addCleanup(lambda: shutil.rmtree(tmpdir))
-        os.chdir(tmpdir)
-        self.git("init")
-
     # Why does the test have a different style git wrapper function than the
     # main code? It just does, OK! Stop asking annoying questions!
     def git(self, *args):
@@ -89,11 +83,16 @@ class GitDissectTest(unittest.TestCase):
             return []
         return self.read_stripped_lines("output.txt")
 
-class TestBisection(GitDissectTest):
+class GitDissectTestWithRepo(GitDissectTest):
     def setUp(self):
         super().setUp()
-        self.setup_empty_repo()
 
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmpdir))
+        os.chdir(tmpdir)
+        self.git("init")
+
+class TestBisection(GitDissectTestWithRepo):
     def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
         """Run a test that should result in multiple worktrees being used.
 
@@ -253,11 +252,7 @@ class TestBisection(GitDissectTest):
     #
     #  ensure things don't break under long enqueuements
 
-class TestTestEveryCommit(GitDissectTest):
-    def setUp(self):
-        super().setUp()
-        self.setup_empty_repo()
-
+class TestTestEveryCommit(GitDissectTestWithRepo):
     def test_smoke(self):
         self.write_pass_fail_script(fail=False)
         commits = []
