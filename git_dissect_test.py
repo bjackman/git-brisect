@@ -483,10 +483,17 @@ def with_node_range(draw, dags):
     dag = draw(dags.filter(lambda d: d.num_nodes > 1))
     return (dag, draw(distinct_sorted_uint_pairs(max_value=dag.num_nodes-1)))
 
-# Strategy that generates a DAG and the ID of a node within that DAG, and a leaf
-# node that is reachable from that other node.
+@dataclasses.dataclass
+class BisectCase:
+    dag: Dag
+    # Range to bisect is this leaf and all its ancestors.
+    leaf: int
+    culprit: int
+
+# Factory strategy that generates a DAG and the ID of a node within that
+# DAG, and a leaf node that is reachable from that other node.
 @hypothesis.strategies.composite
-def with_node_and_reachable_leaf(draw, dags):
+def bisect_cases(draw, dags):
     dag = draw(dags)
     leaves = set(range(dag.num_nodes))
     for src, _ in dag.edges:
@@ -495,7 +502,7 @@ def with_node_and_reachable_leaf(draw, dags):
     leaf_id = sorted(leaves)[draw(uints_upto(len(leaves) - 1))]
     leaf_ancestors = dag.nodes()[leaf_id].ancestor_ids()
     ancestor_id = leaf_ancestors[draw(uints_upto(len(leaf_ancestors) - 1))]
-    return (dag, ancestor_id, leaf_id)
+    return BisectCase(dag=dag, culprit=ancestor_id, leaf=leaf_id)
 
 class TestWithHypothesis(GitDissectTest):
     repo_cache: dict[Dag, str] = {}  # Maps DAGs to repo paths
@@ -582,16 +589,22 @@ class TestWithHypothesis(GitDissectTest):
         self.assertCommitSetPartition((s.commits() for s in subranges),
                                       rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
-    @hypothesis.given(dag_node_leaf=with_node_and_reachable_leaf(dags()))
-    @hypothesis.example((Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})), 2, 2))
-    @hypothesis.example((Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])), 2, 3))
+    @hypothesis.given(case=bisect_cases(dags()))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})),
+        culprit=2, leaf=2))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])),
+        culprit=2, leaf=3))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (0, 2), (0, 3)})),
+        leaf=2, culprit=2))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
-    def test_bisect(self, dag_node_leaf: tuple[Dag, int, int]):
-        self.logger.info(f"Running {dag_node_leaf}")
-        dag, culprit_node_id, leaf_id = dag_node_leaf
-        self.setup_repo(dag)
+    def test_bisect(self, case: BisectCase):
+        self.logger.info(f"Running {case}")
+        self.setup_repo(case.dag)
         # Bisect the range consisting of all the ancestors of the leaf node.
-        range_spec = str(leaf_id)
+        range_spec = str(case.leaf)
 
         # tested_commits.txt will contain a line with each commit that was
         # tested. Create it in advance to simplify the case that no tests get
@@ -606,9 +619,9 @@ class TestWithHypothesis(GitDissectTest):
         # to test if the culprit is an ancestor of HEAD (this command considers
         # commits to be their own ancestor); if it is then HEAD is "broken".
         cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
-               f"! git merge-base --is-ancestor {culprit_node_id} HEAD")
+               f"! git merge-base --is-ancestor {case.culprit} HEAD")
         result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd])
-        self.assertEqual(self.describe(result), str(culprit_node_id))
+        self.assertEqual(self.describe(result), str(case.culprit))
 
         with open(tested_commits_path) as f:
             tested_commits = f.readlines()
