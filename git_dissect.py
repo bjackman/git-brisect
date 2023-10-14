@@ -309,12 +309,12 @@ def do_dissect(args, pool, full_range):
 
             # The commit we'll learn most by testing is the midpoint of the
             # largest remaining subrange. Sorting by size makes this a sort of
-            # hill-climbing search. subranges = sorted(subranges, key=lambda r:
+            # hill-climbing search.
             subranges = sorted(subranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
         if result_commit not in full_range.commits():
-            continue  # We cancelld this one - result is not interesting or meaningful.
+            continue  # We cancelled this one - result is not interesting or meaningful.
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
 
         if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
@@ -325,7 +325,6 @@ def do_dissect(args, pool, full_range):
         logger.info(f"    Canceling {cancel}, remaining: {full_range}")
         pool.cancel(cancel)
 
-        # Abort ongoing tests to free up threads.
         # Drop known-* commits from future testing. subranges are either subsets
         # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
         # off a test for a commit within it, in which case we should have split
