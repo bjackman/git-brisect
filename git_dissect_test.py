@@ -14,41 +14,37 @@ import tempfile
 import time
 import threading
 
-from typing import Iterable
+from typing import Iterable, Optional
 
 import hypothesis
 
 import git_dissect
 
+# Why does the test have a different style git wrapper function than the
+# main code? It just does, OK! Stop asking annoying questions!
+def git(*args):
+    res = subprocess.run(("git",) + args, capture_output=True)
+    try:
+        res.check_returncode()
+    except:
+        print(f"Git command {args} failed.")
+        print(res.stderr.decode())
+        raise
+    return res.stdout.decode().strip()
+
+def commit(msg: str, tag: Optional[str] = None):
+    git("commit", "--allow-empty", "-m", msg)
+    if tag is not None:
+        git("tag", tag)
+    return git("rev-parse", "HEAD")
+
+def merge(*parents):
+    git("merge", "--no-edit", *parents)
+    return git("rev-pase", "HEAD")
+
 class GitDissectTest(unittest.TestCase):
     def setUp(self):
         self.logger = logging.getLogger(self.id())
-        self.commit_counter = 0
-
-    # Why does the test have a different style git wrapper function than the
-    # main code? It just does, OK! Stop asking annoying questions!
-    def git(self, *args):
-        res = subprocess.run(("git",) + args, capture_output=True)
-        try:
-            res.check_returncode()
-        except:
-            print(f"Git command {args} failed.")
-            print(res.stderr.decode())
-            raise
-        return res.stdout.decode().strip()
-
-    def commit(self, msg=None, tag=None):
-        if msg is None:
-            msg = f"commit {self.commit_counter}"
-            self.commit_counter += 1
-        self.git("commit", "--allow-empty", "-m", msg)
-        if tag is not None:
-            self.git("tag", tag)
-        return self.git("rev-parse", "HEAD")
-
-    def merge(self, *parents):
-        self.git("merge", "--no-edit", *parents)
-        return self.git("rev-pase", "HEAD")
 
     def write_executable(self, path, content):
         """Write an executable and git add it"""
@@ -56,7 +52,7 @@ class GitDissectTest(unittest.TestCase):
             f.write(content)
         os.chmod(path, 0o777) # SIR yes SIR o7
 
-        self.git("add", path)
+        git("add", path)
 
     def write_pass_fail_script(self, fail):
         """Write a script to path that can be used to "test" a commit.
@@ -90,7 +86,7 @@ class GitDissectTestWithRepo(GitDissectTest):
         tmpdir = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
-        self.git("init")
+        git("init")
 
 class TestBisection(GitDissectTestWithRepo):
     def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
@@ -115,13 +111,13 @@ class TestBisection(GitDissectTestWithRepo):
         self.write_executable("log_cwd.sh", script)
 
         self.write_pass_fail_script(fail=False)
-        init = self.commit("init")
+        init = commit("init")
         for i in range(50):
-            self.commit("good " + str(i))
+            commit("good " + str(i))
         self.write_pass_fail_script(fail=True)
-        end = self.commit("end")
+        end = commit("end")
 
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
+        self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
         git_dissect.dissect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
                             use_worktrees=use_worktrees, cleanup_worktrees=cleanup_worktrees,
@@ -182,9 +178,9 @@ class TestBisection(GitDissectTestWithRepo):
                 exit {"1" if i > 17 else "0"}
             """
             self.write_executable("run.sh", script)
-            commits.append(self.commit(tag=str(i)))
+            commits.append(commit(msg=str(i), tag=str(i)))
 
-        self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
+        self.logger.info("\n" + git("log", "--graph", "--all", "--oneline"))
 
         # Run the dissection in the background
         dissect_result = None
@@ -256,17 +252,17 @@ class TestTestEveryCommit(GitDissectTestWithRepo):
     def test_smoke(self):
         self.write_pass_fail_script(fail=False)
         commits = []
-        commits.append(self.commit())
-        commits.append(self.commit())
-        commits.append(self.commit())
+        commits.append(commit("1"))
+        commits.append(commit("2"))
+        commits.append(commit("3"))
         self.write_pass_fail_script(fail=True)
-        commits.append(self.commit())
-        commits.append(self.commit())
-        commits.append(self.commit())
+        commits.append(commit("4"))
+        commits.append(commit("5"))
+        commits.append(commit("6"))
         self.write_pass_fail_script(fail=False)
-        commits.append(self.commit())
+        commits.append(commit("7"))
 
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
+        self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
         results = git_dissect.test_every_commit(
             f"{commits[0]}..{commits[-1]}",
@@ -453,7 +449,7 @@ class TestWithHypothesis(GitDissectTest):
 
         tmpdir = tempfile.mkdtemp()
         os.chdir(tmpdir)
-        self.git("init")
+        git("init")
 
         commits = {}  # Maps DagNode.i to commit hash, faster than using git tags.
         def create_commit(node: DagNode):
@@ -469,12 +465,12 @@ class TestWithHypothesis(GitDissectTest):
                 create_commit(parent)
 
             if node.parents:
-                self.git("checkout", commits[node.parents[0].i])
+                git("checkout", commits[node.parents[0].i])
             if len(node.parents) <= 1:
-                commits[node.i] = self.commit(str(node.i))
+                commits[node.i] = commit(msg=str(node.i))
             else:
-                commits[node.i] = self.merge("--no-ff", *[commits[p.i] for p in node.parents])
-            self.git("tag", str(node.i))
+                commits[node.i] = merge("--no-ff", *[commits[p.i] for p in node.parents])
+            git("tag", str(node.i))
 
         for node in dag.nodes():
             create_commit(node)
@@ -482,7 +478,7 @@ class TestWithHypothesis(GitDissectTest):
         self.addClassCleanup(lambda: shutil.rmtree(tmpdir))
 
     def describe(self, rev: str) -> str:
-        return self.git("describe", "--tags", rev).strip()
+        return git("describe", "--tags", rev).strip()
 
     # Asserts that subsets are disjoint and that their union is superset.
     # Assumes that the sets are of git revisions that can be `git describe`d,
