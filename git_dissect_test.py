@@ -91,76 +91,6 @@ class GitDissectTest(unittest.TestCase):
         return self.read_stripped_lines("output.txt")
 
 class TestBisection(GitDissectTest):
-    def test_no_tests_needed(self):
-        # TODO: Actually we should check that the script doesn't get run.
-        self.write_pass_fail_script(fail=False)
-        good = self.commit()
-        self.write_pass_fail_script(fail=True)
-        bad = self.commit()
-
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
-
-        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh","run.sh"]), bad)
-        self.assertFalse(os.path.exists("output.txt"), "Script was run unnecessarily")
-
-    def test_smoke(self):
-        # Linear history where the code gets broken in the middle.
-        self.write_pass_fail_script(fail=False)
-        good = self.commit()
-        want_test1 = self.commit()
-        self.write_pass_fail_script(fail=True)
-        want_culprit = self.commit()
-        bad = self.commit()
-
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
-
-        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh", "./run.sh"]), want_culprit)
-        self.assertCountEqual(self.script_runs(),
-                              [want_test1, want_culprit],
-                              "didn't get the expected set of script runs")
-
-    def test_nonlinear_multiple_good(self):
-        # Branched history where the code is good in both branches and then broken after a merge
-        self.write_pass_fail_script(fail=False)
-        base = self.commit("base")
-        good1 = self.commit("good1")
-        self.git("checkout", base)
-        good2 = self.commit("good2")
-        merge = self.merge(good1)
-        self.write_pass_fail_script(fail=True)
-        want = self.commit("want")
-        bad = self.commit("bad")
-
-        self.logger.info(self.git("log", "--graph", "--all", "--oneline"))
-
-        self.assertEqual(git_dissect.dissect(f"{good1}..{bad}", ["sh", "./run.sh"]), want)
-        runs = self.script_runs()
-        self.assertIn(want, runs)
-        self.assertIn(merge, runs)
-
-    def test_bug_in_branch(self):
-        # Branched history where the bug arises in one of the branches.
-        self.write_pass_fail_script(fail=False)
-        good = self.commit("good")
-        other = self.commit("other")
-        self.git("checkout", good)
-        self.write_pass_fail_script(fail=True)
-        want = self.commit("want")
-        also_test = self.commit("also_test")
-        self.git("checkout", other)
-        self.merge(also_test)
-        bad = self.commit("bad")
-
-        self.logger.info("\n" + self.git("log", "--graph", "--all", "--oneline"))
-
-        self.assertEqual(git_dissect.dissect(f"{good}..{bad}", ["sh", "./run.sh"]), want)
-        # All we do is find the first commit in the bisection range where things
-        # went from good to bad (this is just how git-bisect works). It's
-        # reasonable that we only tested exactly the two commits we needed to
-        # achieve that.
-        runs = self.script_runs()
-        self.assertIn(want, runs)
-
     def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
         """Run a test that should result in multiple worktrees being used.
 
@@ -590,6 +520,7 @@ class TestWithHypothesis(GitDissectTest):
                                       rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
     @hypothesis.given(case=bisect_cases(dags()))
+    # Some random examples that detected bugs in the past
     @hypothesis.example(BisectCase(
         dag=Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})),
         culprit=2, leaf=2))
