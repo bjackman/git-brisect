@@ -84,7 +84,6 @@ class RevRange:
 
     @classmethod
     def from_string(cls, s: str):
-        # TODO test
         exclude = []
         include = []
 
