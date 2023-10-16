@@ -435,7 +435,8 @@ def parse_args(argv: list[str]):
         'section of gitrevisions(7), but without the ... syntax option. Must have ' +
         'a single "included" commit soo "foo ^bar ^baz" is valid but "foo bar ' +
         '^baz" is not. The "included" commit (foo in the example) is the one you ' +
-        'know is "bad". The excluded commits are ones you know are "good".'
+        'know is "bad". The excluded commits (^bar and ^baz in the examples) are ' +
+        'ones you know are "good".'
     ))
     parser.add_argument("cmd", nargs="+")
 
