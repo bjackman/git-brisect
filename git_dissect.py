@@ -202,7 +202,7 @@ class WorkerPool:
 
     # TODO: create worktrees lazily -> support unlimited parallelism.
 
-    def __init__(self, test_cmd, workdirs, cleanup_worktrees):
+    def __init__(self, test_cmd, workdirs):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._in_q = []
@@ -211,7 +211,6 @@ class WorkerPool:
         self._subprocesses = {}
         self._done = False
         self._test_cmd = test_cmd
-        self._cleanup_worktrees = cleanup_worktrees
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -255,8 +254,6 @@ class WorkerPool:
 
                 # TODO: Capture stdout and stderr somewhere useful.
                 run_cmd(["git", "-C", workdir, "checkout", rev])
-                if self._cleanup_worktrees:
-                    run_cmd(["git", "-C", workdir, "clean", "-fdx"])
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -358,7 +355,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True):
     tmpdir = None
     if use_worktrees:
         tmpdir = tempfile.mkdtemp()
@@ -371,8 +368,7 @@ def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=Tr
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(args,
-                          worktrees or [os.getcwd() for _ in range(num_threads)],
-                          cleanup_worktrees=cleanup_worktrees)
+                          worktrees or [os.getcwd() for _ in range(num_threads)])
         return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
@@ -394,7 +390,7 @@ def do_test_every_commit(pool, commits):
 
 # include and exclude specify the set of commits to test.
 def test_every_commit(rev_range: str, args: Iterable[str],
-                      num_threads=8, use_worktrees=True, cleanup_worktrees=False):
+                      num_threads=8, use_worktrees=True):
     commits = RevRange.from_string(rev_range).commits()
     tmpdir = None
     if use_worktrees:
@@ -408,8 +404,7 @@ def test_every_commit(rev_range: str, args: Iterable[str],
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(args,
-                          worktrees or [os.getcwd() for _ in range(num_threads)],
-                          cleanup_worktrees=cleanup_worktrees)
+                          worktrees or [os.getcwd() for _ in range(num_threads)])
         return do_test_every_commit(pool, commits)
     finally:
         if pool:
@@ -440,14 +435,6 @@ def parse_args(argv: list[str]):
         help=(
             "By default, each thread runs the test in its own worktree. " +
             "Set this to disable that, and just run parallel tests in the main git tree"))
-    # TODO: This cleanup logic is actually kinda stupid, probably would have
-    # been better to just leave it to the uesr to prefix their test command with
-    # a cleanup command if they care about it.
-    parser.add_argument(
-        "--no-cleanup-worktrees", action="store_true",
-        help=(
-            "By default, worktrees are hard-cleaned with git clean -fdx after each test." +
-            "Set this to disable that. Ignored if --no-worktrees"))
     parser.add_argument("range", help=(
         'Commit range to bisect, using syntax described in SPECIFYING RANGES ' +
         'section of gitrevisions(7), but without the ... syntax option. Must have ' +
@@ -465,9 +452,8 @@ def main(argv: list[str], output: TextIO) -> int:
         raise NotImplementedError("soz")
     else:
         result = dissect(args.range, args.cmd,
-                         num_threads=args.num_threads, use_worktrees=not
-                         args.no_worktrees, cleanup_worktrees=(not
-                         args.no_worktrees and not args.no_cleanup_worktrees))
+                         num_threads=args.num_threads,
+                         use_worktrees=not args.no_worktrees)
         output.write(f'First bad commit is {result} ("{commit_title(result)}")')
     return 0
 

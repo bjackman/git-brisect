@@ -132,7 +132,7 @@ class RevRangeTest(GitDissectTestWithRepo):
                     self.logger.info(f"Got: {got}")
 
 class TestBisection(GitDissectTestWithRepo):
-    def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
+    def _run_worktree_test(self, use_worktrees: bool):
         """Run a test that should result in multiple worktrees being used.
 
         (Unless use_worktrees is false). The test script records what CWD it was
@@ -163,7 +163,7 @@ class TestBisection(GitDissectTestWithRepo):
         self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
         git_dissect.dissect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
-                            use_worktrees=use_worktrees, cleanup_worktrees=cleanup_worktrees,
+                            use_worktrees=use_worktrees,
                             num_threads=4)
         runs = self.script_runs()
 
@@ -181,19 +181,8 @@ class TestBisection(GitDissectTestWithRepo):
             ret.append((cwd, dirty_status == "0"))
         return ret
 
-    def test_worktree_mode(self):
-        for (cwd, dirty) in self._run_worktree_test(use_worktrees=True,
-                                                    cleanup_worktrees=True):
-            self.assertNotEqual(cwd, os.getcwd())
-            # This is not actually required, any directory is fine, just a hack
-            # assertion to try and catch scripts getting run in totally random
-            # trees.
-            self.assertNotEqual(cwd.find("worktree-"), -1)
-            self.assertFalse(dirty)
-
     def test_worktree_mode_no_cleanup(self):
-        results = self._run_worktree_test(use_worktrees=True,
-                                          cleanup_worktrees=False)
+        results = self._run_worktree_test(use_worktrees=True)
         # If this flakes, it might be that by chance no worktree got reused,
         # which isn't technically a bug. Try to find a way to force them to get
         # reused.
