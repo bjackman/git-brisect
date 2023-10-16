@@ -83,7 +83,7 @@ class RevRange:
         self._midpoint: Optional[str] = None
 
     @classmethod
-    def from_string(cls, s):
+    def from_string(cls, s: str):
         # TODO test
         exclude = []
         include = []
