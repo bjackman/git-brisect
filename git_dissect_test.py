@@ -47,6 +47,8 @@ def merge(*parents):
     return git("rev-pase", "HEAD")
 
 class GitDissectTest(unittest.TestCase):
+    logger: logging.Logger
+
     def setUp(self):
         self.logger = logging.getLogger(self.id())
 
@@ -91,6 +93,43 @@ class GitDissectTestWithRepo(GitDissectTest):
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
         git("init")
+
+class RevRangeTest(GitDissectTestWithRepo):
+    def setUp(self):
+        super().setUp()
+
+        # RevRange uses the repro to generate its __str__. Seems kinda sketchy
+        # lol but it's useful. To make that work here, give it a repo.
+        commit("foo", tag="foo")
+        commit("bar", tag="bar")
+
+    def test_from_string(self):
+        cases = [
+            ("foo", git_dissect.RevRange(exclude=[], include="foo")),
+            ("foo ^bar", git_dissect.RevRange(exclude=["bar"], include="foo")),
+            ("^bar foo", git_dissect.RevRange(exclude=["bar"], include="foo")),
+            ("foo ^bar ^baz", git_dissect.RevRange(exclude=["bar", "baz"], include="foo")),
+            ("bar..foo", git_dissect.RevRange(exclude=["bar"], include="foo")),
+        ]
+        for in_str, want in cases:
+            with self.subTest(in_str=in_str):
+                got = git_dissect.RevRange.from_string(in_str)
+                self.assertEqual(want.include, got.include)
+                self.assertEqual(want.exclude, got.exclude)
+
+    def test_case_from_string_fail(self):
+        cases = [
+            "foo bar",
+            # We could actually handle this in the case that foo is an ancestor
+            # of bar or vice versa. But we don't.
+            "bar...foo",
+            ""
+        ]
+        for in_str in cases:
+            with self.subTest(in_str=in_str):
+                with self.assertRaises(git_dissect.BadRangeError):
+                    got = git_dissect.RevRange.from_string(in_str)
+                    self.logger.info(f"Got: {got}")
 
 class TestBisection(GitDissectTestWithRepo):
     def _run_worktree_test(self, use_worktrees: bool, cleanup_worktrees=False):
@@ -476,8 +515,6 @@ class TestWithHypothesis(GitDissectTest):
 
     def setUp(self):
         super().setUp()
-
-        self.logger = logging.getLogger(self.id())
 
     def setup_repo(self, dag: Dag):
         if path := self.repo_cache.get(dag):

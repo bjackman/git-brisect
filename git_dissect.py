@@ -116,7 +116,7 @@ class RevRange:
             raise BadRangeError(f"Can't dissect with multiple tip revs: {' '.join(include)}")
         return cls(exclude=exclude, include=include[0])
 
-    def __str__(self):
+    def __repr__(self):
         return "RevRange([%s %s] %d commits)" % (
             describe(self.include), " ".join("^" + describe(e) for e in self.exclude), len(self.commits()))
 
