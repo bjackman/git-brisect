@@ -595,8 +595,6 @@ class TestWithHypothesis(GitDissectTest):
         tested_multiple = [v for v, c in collections.Counter(tested_commits).items() if c > 1]
         self.assertFalse(tested_multiple)  # Should be empty (nothing tested twice)
 
-    # TODO: test multiple "good" that are not the root of the repo
-
 class TestEndToEnd(unittest.TestCase):
     logger: logging.Logger
 

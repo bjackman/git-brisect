@@ -199,8 +199,6 @@ class WorkerPool:
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
 
-    # TODO: create worktrees lazily -> support unlimited parallelism.
-
     def __init__(self, test_cmd, workdirs):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
@@ -428,7 +426,6 @@ def parse_args(argv: list[str]):
         help=(
             "Max parallelism. " +
             " Note that increasing this incurs a startup cost if using worktrees."))
-    # TODO: make it a bool with a value instead of store_tree
     parser.add_argument(
         "--no-worktrees", action="store_true",
         help=(
