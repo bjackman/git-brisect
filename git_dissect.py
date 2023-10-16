@@ -11,6 +11,7 @@ git-dissect [--[no-]worktrees] $*
 
 import argparse
 import dataclasses
+import datetime
 import logging
 import os
 import signal
@@ -430,6 +431,19 @@ def parse_args(argv: list[str]):
         help=(
             "By default, each thread runs the test in its own worktree. " +
             "Set this to disable that, and just run parallel tests in the main git tree"))
+    parser.add_argument("-o", "--out-dir", type=str, help=(
+        'Extant directory to store output in. Each commit gets a subdirectory, in there' +
+        'will be a returncode.txt, stderr.txt and stdout.txt. If the test was' +
+        'cancelled, an empty file named CANCELED will be next to them. There is' +
+        'also a subdirectory called output/ which is a place for the test command' +
+        'to dump extra artifacts; the path of this directory is passed as the' +
+        'GIT_DISSECT_OUTPUT_DIR environment veriable. If this arg is not set ' +
+        'an output directory will be created in --out-dir-in.'
+    ))
+    parser.add_argument("-i", "--out-dir-in", type=str, default=tempfile.gettempdir(), help=(
+        'Extant parent directory for output directory if --out-dir is not set. See ' +
+        '--out-dir for info about the output directory.'
+    ))
     parser.add_argument("range", help=(
         'Commit range to bisect, using syntax described in SPECIFYING RANGES ' +
         'section of gitrevisions(7), but without the ... syntax option. Must have ' +
@@ -442,8 +456,25 @@ def parse_args(argv: list[str]):
 
     return parser.parse_args(argv)
 
+def make_out_dir(args) -> str:
+    if args.out_dir:
+        out_dir = args.out_dir
+    else:
+        # Sorry knights of ISO 8601, colons aren't allowed in Windows filesnames.
+        timestamp  = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        out_dir = os.path.join(args.out_dir_in, "output-" + timestamp)
+        try:
+            os.mkdir(out_dir)
+        except FileExistsError:
+            out_dir = tempfile.mkdtemp(prefix="output-" + timestamp,
+                                       dir=args.out_dir_in)
+
+    return out_dir
+
 def main(argv: list[str], output: TextIO) -> int:
     args = parse_args(argv)
+    out_dir = make_out_dir(args)
+
     if False:  # args.test_every_commit:
         raise NotImplementedError("soz")
     else:

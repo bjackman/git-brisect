@@ -603,9 +603,9 @@ class TestEndToEnd(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
         self.logger = logging.getLogger(self.id())
+        create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
 
     def test_bisect_smoke(self):
-        create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
         # "Bug" is in commit 2.
         cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
 
@@ -626,6 +626,14 @@ class TestEndToEnd(unittest.TestCase):
                 self.assertEqual(stdout.getvalue(),
                                 f'First bad commit is {commit_hash} ("2")',
                                 f"Args: {args}")
+
+    def test_out_dir(self):
+        cmd = ["bash", "-c", """
+            echo "hello from $(git describe --tags HEAD) stdout"
+            echo "hello from $(git describe --tags HEAD) stderr" 1>&2
+            echo "hello from $(git describe --tags HEAD) output" > $GIT_DISSECT_OUTPUT_DIR/t.txt
+        """]
+        git_dissect.main(["0..4", "--"] + cmd, io.StringIO())
 
 
 if __name__ == "__main__":
