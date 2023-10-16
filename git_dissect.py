@@ -465,10 +465,9 @@ def main(argv: list[str], output: TextIO) -> int:
         raise NotImplementedError("soz")
     else:
         result = dissect(args.range, args.cmd,
-                            num_threads=args.num_threads, use_worktrees=not
-                            args.no_worktrees, cleanup_worktrees=(not
-                            args.no_worktrees and
-                                    not args.no_cleanup_worktrees))
+                         num_threads=args.num_threads, use_worktrees=not
+                         args.no_worktrees, cleanup_worktrees=(not
+                         args.no_worktrees and not args.no_cleanup_worktrees))
         output.write(f'First bad commit is {result} ("{commit_title(result)}")')
     return 0
 
