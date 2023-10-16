@@ -611,14 +611,21 @@ class TestEndToEnd(unittest.TestCase):
         # "Bug" is in commit 2.
         cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
 
-        for range_desc in ["0..4", "4 ^0", "^0 4"]:
-            stdout = io.StringIO()
-            args = [range_desc, "--"] + cmd
-            git_dissect.main(args, stdout)
-            commit_hash = git_dissect.rev_parse("2")
-            self.assertEqual(stdout.getvalue(),
-                             f'First bad commit is {commit_hash} ("2")',
-                             f"Args: {args}")
+        args_cases = [
+            ["0..4", "--"] + cmd,
+            ["4 ^0", "--"] + cmd,
+            ["--no-worktrees", "0..4", "--"] + cmd,
+            ["--num-threads", "4", "0..4", "--"] + cmd,
+        ]
+        for args in args_cases:
+            with self.subTest(args=args):
+                self.logger.info(args)
+                stdout = io.StringIO()
+                git_dissect.main(args, stdout)
+                commit_hash = git_dissect.rev_parse("2")
+                self.assertEqual(stdout.getvalue(),
+                                f'First bad commit is {commit_hash} ("2")',
+                                f"Args: {args}")
 
 
 if __name__ == "__main__":
