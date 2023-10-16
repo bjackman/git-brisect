@@ -418,6 +418,41 @@ class BisectCase:
     leaf: int
     culprit: int
 
+# Sets up a git repository in the CWD where hte history structure matches the
+# given DAG. Each commit is tagged with the corresponding node's ID.
+def create_history_cwd(dag: Dag):
+    if os.path.exists(".git"):
+        raise RuntimeError(f"Already a repository in {os.getcwd()}")
+
+    git("init")
+
+    # Maps DagNode.i to commit hash, faster than using git tags.
+    commits: dict[int, str] = {}
+    def create_commit(node: DagNode):
+        if node.i in commits:
+            return
+
+        if len(node.parents) == 0:
+            # This is the "root" of the history. In this code we always have
+            # exactly one of these - check that.
+            assert len(commits) == 0
+
+        for parent in node.parents:
+            create_commit(parent)
+
+        if node.parents:
+            git("checkout", commits[node.parents[0].i])
+        if len(node.parents) <= 1:
+            commits[node.i] = commit(msg=str(node.i))
+        else:
+            commits[node.i] = merge("--no-ff", *[commits[p.i] for p in node.parents])
+        git("tag", str(node.i))
+
+    # Actually we only need to do this for the leaves but we don't have those to
+    # hand at the moment.
+    for node in dag.nodes():
+        create_commit(node)
+
 # Factory strategy that generates a DAG and the ID of a node within that
 # DAG, and a leaf node that is reachable from that other node.
 @hypothesis.strategies.composite
@@ -440,41 +475,14 @@ class TestWithHypothesis(GitDissectTest):
 
         self.logger = logging.getLogger(self.id())
 
-    # Sets up and switches to a repo where the history structure matches the
-    # DAG. Each commit is tagged with the corresponding node's ID.
-    def setup_repo(self, dag):
+    def setup_repo(self, dag: Dag):
         if path := self.repo_cache.get(dag):
             os.chdir(path)
             return
 
         tmpdir = tempfile.mkdtemp()
         os.chdir(tmpdir)
-        git("init")
-
-        commits = {}  # Maps DagNode.i to commit hash, faster than using git tags.
-        def create_commit(node: DagNode):
-            if node.i in commits:
-                return
-
-            if len(node.parents) == 0:
-                # This is the "root" of the history. In this code we always have
-                # exactly one of these - check that.
-                self.assertEqual(len(commits), 0)
-
-            for parent in node.parents:
-                create_commit(parent)
-
-            if node.parents:
-                git("checkout", commits[node.parents[0].i])
-            if len(node.parents) <= 1:
-                commits[node.i] = commit(msg=str(node.i))
-            else:
-                commits[node.i] = merge("--no-ff", *[commits[p.i] for p in node.parents])
-            git("tag", str(node.i))
-
-        for node in dag.nodes():
-            create_commit(node)
-
+        create_history_cwd(dag)
         self.addClassCleanup(lambda: shutil.rmtree(tmpdir))
 
     def describe(self, rev: str) -> str:
