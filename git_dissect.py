@@ -420,9 +420,8 @@ def parse_args(argv: list[str]):
         if i < 0:
             raise ValueError("value cannot be negative")
         return i
-    # TODO: add short options (-n etc)
     parser.add_argument(
-        "--num-threads", type=positive_int, default=8,
+        "-n", "--num-threads", type=positive_int, default=8,
         help=(
             "Max parallelism. " +
             " Note that increasing this incurs a startup cost if using worktrees."))

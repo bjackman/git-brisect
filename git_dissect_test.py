@@ -614,6 +614,8 @@ class TestEndToEnd(unittest.TestCase):
             ["4 ^0", "--"] + cmd,
             ["--no-worktrees", "0..4", "--"] + cmd,
             ["--num-threads", "4", "0..4", "--"] + cmd,
+            ["-n", "4", "0..4", "--"] + cmd,
+            ["-n4", "0..4", "--"] + cmd,
         ]
         for args in args_cases:
             with self.subTest(args=args):
