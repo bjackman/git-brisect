@@ -609,22 +609,27 @@ class TestWithHypothesis(GitDissectTest):
     # TODO: test multiple "good" that are not the root of the repo
 
 class TestEndToEnd(unittest.TestCase):
+    logger: logging.Logger
+
     def setUp(self):
         tmpdir = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
-
+        self.logger = logging.getLogger(self.id())
 
     def test_bisect_smoke(self):
         create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
         # "Bug" is in commit 2.
         cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
 
-        stdout = io.StringIO()
-        git_dissect.main(["0..4", "--"] + cmd, stdout)
-        commit_hash = git_dissect.rev_parse("2")
-        self.assertEqual(stdout.getvalue(),
-                         f'First bad commit is {commit_hash} ("2")')
+        for range_desc in ["0..4", "4 ^0", "^0 4"]:
+            stdout = io.StringIO()
+            args = [range_desc, "--"] + cmd
+            git_dissect.main(args, stdout)
+            commit_hash = git_dissect.rev_parse("2")
+            self.assertEqual(stdout.getvalue(),
+                             f'First bad commit is {commit_hash} ("2")',
+                             f"Args: {args}")
 
 
 if __name__ == "__main__":
