@@ -22,7 +22,7 @@ import queue
 import shutil
 import sys
 
-from typing import Optional
+from typing import Optional, TextIO
 from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,15 @@ def merge_base(*commits):
 
 def describe(rev):
     return run_cmd(["git", "describe", "--tags", "--always", rev]).strip()
+
+# First line of commit message (git calls this the "subject" but that's
+# confusing).
+def commit_title(rev):
+    output = run_cmd(["git", "log", "-n1", "--format=%s", rev])
+    if output.endswith("\n"):
+        output = output[:-1]
+    return output
+
 
 class BadRangeError(Exception):
     pass
@@ -410,7 +419,7 @@ def test_every_commit(rev_range: str, args: Iterable[str],
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
-def parse_args():
+def parse_args(argv: list[str]):
     parser = argparse.ArgumentParser(
         description="git bisect and rebase --exec, but with parallelism")
     # TODO: add short args (not sure how to do this, no docs on the plane!)
@@ -439,70 +448,38 @@ def parse_args():
         help=(
             "By default, worktrees are hard-cleaned with git clean -fdx after each test." +
             "Set this to disable that. Ignored if --no-worktrees"))
+    parser.add_argument("range", help=(
+        'Commit range to bisect, using syntax described in SPECIFYING RANGES ' +
+        'section of gitrevisions(7), but without the ... syntax option. Must have ' +
+        'a single "included" commit soo "foo ^bar ^baz" is valid but "foo bar ' +
+        '^baz" is not. The "included" commit (foo in the example) is the one you ' +
+        'know is "bad". The excluded commits are ones you know are "good".'
+    ))
     parser.add_argument("cmd", nargs="+")
-    parser.add_argument(
-        "--start", metavar="start", type=str, help=(
-            "Start of bisection. If not provided, this tool assumes you've separately " +
-            "begun a bisection and set this via 'git bisect good'"))
-    parser.add_argument(
-        "--end", type=str, help=(
-            "Start of bisection. If not provided, either set this separately via " +
-            "'git bisect bad', or this tool will use HEAD"))
-    parser.add_argument(
-        "--test-every-commit", action="store_true",
-        help="Instead of bissecting, just test every commit and report every result.")
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+def main(argv: list[str], output: TextIO) -> int:
+    args = parse_args(argv)
+    if False:  # args.test_every_commit:
+        raise NotImplementedError("soz")
+    else:
+        result = dissect(args.range, args.cmd,
+                            num_threads=args.num_threads, use_worktrees=not
+                            args.no_worktrees, cleanup_worktrees=(not
+                            args.no_worktrees and
+                                    not args.no_cleanup_worktrees))
+        output.write(f'First bad commit is {result} ("{commit_title(result)}")')
+    return 0
 
 if __name__ == "__main__":
     # Fix Python's threading system so that when a thread has an unhandled
     # exception the program exits.
     threading.excepthook = excepthook
 
-    args = parse_args()
-    was_in_bisect = True  # TODO lol
-    if args.test_every_commit:
-        if not args.start:
-            print("--start is required with --test-every-commit")
-            sys.exit(1)
-
-        # TODO: run test_every_commit
-        # results = test_every_commit(
-        #     args.cmd, # TODO args lol
-        #     num_threads=args.num_threads,
-        #     use_worktrees=not args.no_worktrees,
-        #     cleanup_worktrees=(not args.no_worktrees and
-        #             not args.no_cleanup_worktrees))
-        # # TODO: Print these as a range summary, or more like in a commit graph at least
-        # for commit, exit_code in results:
-        #     print(commit + ": exit code was " + str(exit_code))
-    else:
-        try:
-            if not was_in_bisect:
-                run_cmd(["git", "bisect", "start"])
-            if args.start:
-                run_cmd(["git", "bisect", "good", args.start])
-            if args.end:
-                run_cmd(["git", "bisect", "bad", args.to])
-            # if "refs/bisect/bad" not in all_refs():
-            #     run_cmd(["git", "bisect", "bad"])
-            rev_range = "refs/bisect/good..refs/bisect/bad" # TODO
-            result = dissect(rev_range, args.cmd,
-                             num_threads=args.num_threads,
-                             use_worktrees=not args.no_worktrees,
-                             cleanup_worktrees=(not args.no_worktrees and
-                                     not args.no_cleanup_worktrees))
-            print("First bad commit is " + result)
-        finally:
-            if not was_in_bisect:
-                run_cmd(["git", "bisect", "reset"])
-
-
+    sys.exit(main(sys.argv, sys.stdout))
 
 # TODO
-#
-# See if it's possible to bisect in a worktree, so that the main tree can
-#  be used meanwhile by the user.
 #
 # replacing args? Original idea was to have placeholders like with find
 #  --exec. But can't remember why I thought this was useful.
@@ -516,5 +493,3 @@ if __name__ == "__main__":
 # ability to watch a range like local CI
 #
 # look into async and see if we can drop the ugly thread pool
-#
-# remove requirement to use special bisect refs

@@ -4,6 +4,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import datetime
+import io
 import logging
 import unittest
 import os
@@ -566,6 +567,24 @@ class TestWithHypothesis(GitDissectTest):
         self.assertFalse(tested_multiple)  # Should be empty (nothing tested twice)
 
     # TODO: test multiple "good" that are not the root of the repo
+
+class TestEndToEnd(unittest.TestCase):
+    def setUp(self):
+        tmpdir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmpdir))
+        os.chdir(tmpdir)
+
+
+    def test_bisect_smoke(self):
+        create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
+        # "Bug" is in commit 2.
+        cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
+
+        stdout = io.StringIO()
+        git_dissect.main(["0..4", "--"] + cmd, stdout)
+        commit_hash = git_dissect.rev_parse("2")
+        self.assertEqual(stdout.getvalue(),
+                         f'First bad commit is {commit_hash} ("2")')
 
 
 if __name__ == "__main__":
