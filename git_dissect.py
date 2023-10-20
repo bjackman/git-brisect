@@ -287,6 +287,7 @@ class WorkerPool:
             t.join()
 
 def do_dissect(args, pool, full_range):
+    logger.info(f"Dissecting range {full_range}")
     # Note: a "culprit" is a commit that is bad and all of whose ancestors are
     # good. There may actually be more than one such commit, but sometimes it's
     # clearer to talk about "the" culprit anyway, that just means the one we're
@@ -362,16 +363,22 @@ def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=Tr
 
     pool = None
     try:
+        logger.info("Setting up worktrees...")
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
+        logger.info("...Done setting up worktrees.")
         pool = WorkerPool(args,
                           worktrees or [os.getcwd() for _ in range(num_threads)])
         return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
+            logger.info("Aborting pending tests...")
             pool.interrupt_and_join()
+            logger.info("...Pending tests aborted.")
+        logger.info("Tearing down worktrees...")
         for w in worktrees:
             run_cmd(["git", "worktree", "remove", "--force", w])
+        logger.info("... Done tearing down worktrees.")
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
@@ -457,6 +464,9 @@ if __name__ == "__main__":
     # Fix Python's threading system so that when a thread has an unhandled
     # exception the program exits.
     threading.excepthook = excepthook
+
+    logging.basicConfig(level=logging.DEBUG,
+                        format="%(asctime)s %(levelname)-6s %(message)s")
 
     sys.exit(main(sys.argv, sys.stdout))
 
