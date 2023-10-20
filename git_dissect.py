@@ -450,7 +450,7 @@ def parse_args(argv: list[str]):
     return parser.parse_args(argv)
 
 def main(argv: list[str], output: TextIO) -> int:
-    args = parse_args(argv)
+    args = parse_args(argv[1:])
     if False:  # args.test_every_commit:
         raise NotImplementedError("soz")
     else:
