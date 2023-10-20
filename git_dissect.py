@@ -472,6 +472,10 @@ if __name__ == "__main__":
 
 # TODO
 #
+# Support reusing existing worktrees
+#
+# Handle Ctrl-C and ensure worktrees are cleaned up
+#
 # replacing args? Original idea was to have placeholders like with find
 #  --exec. But can't remember why I thought this was useful.
 #  One usage of this would be to implement something you could pass to make's
