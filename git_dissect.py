@@ -44,11 +44,9 @@ def run_cmd(args: list[str]) -> str:
 def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
 
-def rev_list(spec):
-    return run_cmd(["git", "rev-list", spec]).splitlines()
-
 def list_parents(rev):
-    results = run_cmd(["git", "rev-list", "--parents", "-n", "1", rev]).strip()
+    # The extra -- ensures no ambiguity between revision and paths.
+    results = run_cmd(["git", "rev-list", "--parents", "-n", "1", rev, "--"]).strip()
     return results.split(" ")[1:]  # First item is @rev.
 
 def merge_base(*commits):
@@ -131,8 +129,9 @@ class RevRange:
 
         # Find commits in range, sorted by descending distance to nearest
         # endpoint.
+        # The extra -- ensures no ambiguity between revision and paths.
         args =  (["git", "rev-list", "--bisect-all"] +
-                 [self.include] + ["^" + r for r in self.exclude])
+                 [self.include] + ["^" + r for r in self.exclude] + ["--"])
         out = run_cmd(args)
         commits_by_distance = [l.split(" ")[0] for l in out.splitlines()]
 
