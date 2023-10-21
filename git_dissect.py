@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import pathlib
 import signal
 import subprocess
 import tempfile
@@ -203,7 +204,7 @@ class WorkerPool:
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
 
-    def __init__(self, test_cmd, workdirs):
+    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path]):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._in_q = []
@@ -242,7 +243,7 @@ class WorkerPool:
                     # TODO: Does this work on Windows?
                     self._subprocesses[rev].send_signal(signal.SIGINT)
 
-    def _work(self, workdir):
+    def _work(self, workdir: pathlib.Path):
         while True:
             with self._cond:
                 while not self._in_q and not self._done:
@@ -254,7 +255,7 @@ class WorkerPool:
                 self._in_q = self._in_q[1:]
 
                 # TODO: Capture stdout and stderr somewhere useful.
-                run_cmd(["git", "-C", workdir, "checkout", rev])
+                run_cmd(["git", "-C", str(workdir), "checkout", rev])
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -360,8 +361,8 @@ def excepthook(*args, **kwargs):
 def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True):
     tmpdir = None
     if use_worktrees:
-        tmpdir = tempfile.mkdtemp()
-        worktrees = [os.path.join(tmpdir, f"worktree-{i}") for i in range(num_threads)]
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        worktrees = [tmpdir / f"worktree-{i}" for i in range(num_threads)]
     else:
         worktrees = []
 
@@ -372,7 +373,7 @@ def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=Tr
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         logger.info("...Done setting up worktrees.")
         pool = WorkerPool(args,
-                          worktrees or [os.getcwd() for _ in range(num_threads)])
+                          worktrees or [pathlib.Path.cwd() for _ in range(num_threads)])
         return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
