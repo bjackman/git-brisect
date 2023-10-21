@@ -568,22 +568,7 @@ class TestWithHypothesis(GitDissectTest):
         self.assertCommitSetPartition((s.commits() for s in subranges),
                                       rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
 
-    @hypothesis.given(case=bisect_cases(dags()))
-    # Some random examples that detected bugs in the past
-    @hypothesis.example(BisectCase(
-        dag=Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})),
-        culprit=2, leaf=2))
-    @hypothesis.example(BisectCase(
-        dag=Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])),
-        culprit=2, leaf=3))
-    @hypothesis.example(BisectCase(
-        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (0, 2), (0, 3)})),
-        leaf=2, culprit=2))
-    @hypothesis.example(BisectCase(
-        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (2, 3), (0, 3)})),
-        leaf=3, culprit=3))
-    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
-    def test_bisect(self, case: BisectCase):
+    def _test_bisect(self, case: BisectCase):
         self.logger.info(f"Running {case}")
         self.setup_repo(case.dag)
         # Bisect the range consisting of all the ancestors of the leaf node.
@@ -614,6 +599,30 @@ class TestWithHypothesis(GitDissectTest):
             tested_commits = f.readlines()
         tested_multiple = [v for v, c in collections.Counter(tested_commits).items() if c > 1]
         self.assertFalse(tested_multiple)  # Should be empty (nothing tested twice)
+
+    @hypothesis.given(case=bisect_cases(dags()))
+    # Some random examples that detected bugs in the past
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=3, edges=frozenset({(0, 1), (0, 2), (1, 2)})),
+        culprit=2, leaf=2))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset([(0, 1), (1, 2), (2, 3)])),
+        culprit=2, leaf=3))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (0, 2), (0, 3)})),
+        leaf=2, culprit=2))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (2, 3), (0, 3)})),
+        leaf=3, culprit=3))
+    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
+    def test_bisect(self, case: BisectCase):
+        self._test_bisect(case)
+
+    def test_bisect_example(self):
+        self._test_bisect(
+            case=BisectCase(
+                dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (0, 2), (1, 2), (0, 3), (1, 3)})),
+                leaf=3, culprit=3))
 
 class TestEndToEnd(unittest.TestCase):
     logger: logging.Logger
