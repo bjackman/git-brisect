@@ -42,8 +42,8 @@ def commit(msg: str, tag: Optional[str] = None):
         git("tag", tag)
     return git("rev-parse", "HEAD")
 
-def merge(*parents):
-    git("merge", "--no-edit", *parents)
+def merge(msg: str, parents: list[str]):
+    git("merge", "-m", msg, "--no-ff", *parents)
     return git("rev-pase", "HEAD")
 
 class GitDissectTest(unittest.TestCase):
@@ -484,7 +484,8 @@ def create_history_cwd(dag: Dag):
         if len(node.parents) <= 1:
             commits[node.i] = commit(msg=str(node.i))
         else:
-            commits[node.i] = merge("--no-ff", *[commits[p.i] for p in node.parents])
+            commits[node.i] = merge(msg=str(node.i),
+                                    parents=[str(p.i) for p in node.parents])
         git("tag", str(node.i))
 
     # Actually we only need to do this for the leaves but we don't have those to
