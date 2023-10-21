@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import datetime
 import logging
+import multiprocessing
 import os
 import pathlib
 import signal
@@ -457,7 +458,7 @@ def parse_args(argv: list[str]):
             raise ValueError("value cannot be negative")
         return i
     parser.add_argument(
-        "-n", "--num-threads", type=positive_int, default=8,
+        "-n", "--num-threads", type=positive_int, default=multiprocessing.cpu_count(),
         help=(
             "Max parallelism. " +
             " Note that increasing this incurs a startup cost if using worktrees."))
