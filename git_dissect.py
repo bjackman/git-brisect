@@ -113,6 +113,10 @@ class RevRange:
             # feel it could be done. Would be interesting to find out why
             # the normal git-bisect doesn't allow it.
             raise BadRangeError(f"Can't dissect with multiple tip revs: {' '.join(include)}")
+        # Trying to debug rare test flake where we somehow dissect the wrong
+        # range. The dissection works fine but the range printed at the
+        # beginning of do_dissect is wrong.
+        logger.debug(f"RevRange.from_string({s}): include={include} exclude={exclude}")
         return cls(exclude=exclude, include=include[0])
 
     def __repr__(self):

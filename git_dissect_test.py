@@ -473,7 +473,14 @@ def create_history_cwd(dag: Dag):
             create_commit(parent)
 
         if node.parents:
-            git("checkout", commits[node.parents[0].i])
+            # https://stackoverflow.com/questions/25384469/when-a-git-commit-has-multiple-parents-what-are-the-stats-calculated-against
+            # If the parent commits are already ancestors of HEAD then git merge
+            # doesn't create a commit, even with --no-ff (--no-ff means create a
+            # merge commit even if HEAD is an ancestor of the input revision).
+            # So we need to check out an ancestor-most parent. Ancestry is a
+            # sub-ordering of the numeric ordering of the node IDs so min will
+            # do the trick.
+            git("checkout", str(min(p.i for p in node.parents)))
         if len(node.parents) <= 1:
             commits[node.i] = commit(msg=str(node.i))
         else:
@@ -566,6 +573,9 @@ class TestWithHypothesis(GitDissectTest):
     @hypothesis.example(BisectCase(
         dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (0, 2), (0, 3)})),
         leaf=2, culprit=2))
+    @hypothesis.example(BisectCase(
+        dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (2, 3), (0, 3)})),
+        leaf=3, culprit=3))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
     def test_bisect(self, case: BisectCase):
         self.logger.info(f"Running {case}")
