@@ -494,12 +494,16 @@ def parse_args(argv: list[str]):
 
     return parser.parse_args(argv)
 
-def make_out_dir(args) -> pathlib.Path:
+def make_out_dir(args: list[str], now: datetime.datetime) -> pathlib.Path:
     if args.out_dir:
         out_dir = args.out_dir
+        try:
+            os.mkdir(out_dir)
+        except FileExistsError:
+            pass
     else:
         # Sorry knights of ISO 8601, colons aren't allowed in Windows filesnames.
-        timestamp  = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        timestamp  = now.strftime("%Y%m%dT%H%M%S")
         out_dir = args.out_dir_in / ("output-" + timestamp)
         try:
             os.mkdir(out_dir)
@@ -509,9 +513,10 @@ def make_out_dir(args) -> pathlib.Path:
 
     return out_dir
 
-def main(argv: list[str], output: TextIO) -> int:
+def main(argv: list[str], output: TextIO, now: datetime.datetime) -> int:
     args = parse_args(argv[1:])
-    out_dir = make_out_dir(args)
+    out_dir = make_out_dir(args, now)
+    output.write(f'Writing output to {out_dir}\n')
 
     if False:  # args.test_every_commit:
         raise NotImplementedError("soz")
@@ -520,14 +525,14 @@ def main(argv: list[str], output: TextIO) -> int:
                          num_threads=args.num_threads,
                          use_worktrees=not args.no_worktrees,
                          out_dir=out_dir)
-        output.write(f'First bad commit is {result} ("{commit_title(result)}")')
+        output.write(f'First bad commit is {result} ("{commit_title(result)}")\n')
     return 0
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
 
-    sys.exit(main(sys.argv, sys.stdout))
+    sys.exit(main(sys.argv, sys.stdout, datetime.datetime.now()))
 
 # TODO
 #

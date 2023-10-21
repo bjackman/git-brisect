@@ -9,6 +9,7 @@ import logging
 import unittest
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -614,12 +615,25 @@ class TestWithHypothesis(GitDissectTest):
 class TestEndToEnd(unittest.TestCase):
     logger: logging.Logger
 
+    now = datetime.datetime(2023, 10, 21, 17, 30, 4, 605908)
+
     def setUp(self):
         tmpdir = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
         self.logger = logging.getLogger(self.id())
         create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
+
+    def grep(self, s: str, pattern: str):
+        ret = None
+        regexp = re.compile(pattern)
+        for line in s.splitlines():
+            if regexp.match(line):
+                self.assertIsNone(ret, f"Multiple lines match /{pattern}/:\n{line}\n{ret}")
+                ret = line
+        if not ret:
+            raise AssertionError(f"Didn't find a line matching /{pattern}/")
+        return ret
 
     def test_bisect_smoke(self):
         # "Bug" is in commit 2.
@@ -637,11 +651,37 @@ class TestEndToEnd(unittest.TestCase):
             with self.subTest(args=args):
                 self.logger.info(args)
                 stdout = io.StringIO()
-                git_dissect.main(args, stdout)
+                git_dissect.main(args, stdout, self.now)
                 commit_hash = git_dissect.rev_parse("2")
-                self.assertEqual(stdout.getvalue(),
-                                f'First bad commit is {commit_hash} ("2")',
-                                f"Args: {args}")
+                line = self.grep(stdout.getvalue(), '^First bad commit is.*')
+                self.assertEqual(line, f'First bad commit is {commit_hash} ("2")')
+
+    def test_out_dir_creation(self):
+        def check_out_dir(args):
+            stdout = io.StringIO()
+            full_args = ["git-dissect"] + args + [
+                "0..4", "--", "bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
+            git_dissect.main(full_args, stdout, self.now)
+            line = self.grep(stdout.getvalue(), "^Writing output to.*")
+            out_dir = line.split(" ")[-1]
+            self.assertTrue(os.path.isdir(out_dir))
+            self.addCleanup(lambda: shutil.rmtree(out_dir))
+            return out_dir
+
+        # Default: just check existence.
+        check_out_dir([])
+
+        out_dir = check_out_dir(["--out-dir", f"{os.getcwd()}/foo-bar"])
+        self.assertEqual(out_dir, f"{os.getcwd()}/foo-bar")
+
+        out_dir_1 = check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
+        self.assertTrue(out_dir_1.startswith(f"{os.getcwd()}/foo-bar/"))
+
+        # Second time, since the timestamp is the same, the output directory
+        # should get a unique suffix.
+        out_dir_2 = check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
+        self.assertTrue(out_dir_2.startswith(out_dir_1))
+        self.assertNotEqual(out_dir_2, out_dir_1)
 
     def test_out_dir_contents(self):
         out_dir = pathlib.Path.cwd() / "out_dir"
@@ -676,7 +716,7 @@ class TestEndToEnd(unittest.TestCase):
         def run_dissect():
             nonlocal dissect_result
             args = ["git-dissect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
-            dissect_result = git_dissect.main(args, io.StringIO())
+            dissect_result = git_dissect.main(args, io.StringIO(), self.now)
         thread = threading.Thread(target=run_dissect)
         thread.start()
         self.addCleanup(thread.join)
