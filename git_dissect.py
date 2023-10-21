@@ -238,6 +238,7 @@ class WorkerPool:
 
     def cancel(self, range: RevRange):
         with self._cond:
+            self._in_q = list(r for r in self._in_q if r not in range.commits())
             for rev, p in self._subprocesses.items():
                 if rev in range.commits():
                     # TODO: Does this work on Windows?
