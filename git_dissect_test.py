@@ -23,7 +23,7 @@ import git_dissect
 
 # Why does the test have a different style git wrapper function than the
 # main code? It just does, OK! Stop asking annoying questions!
-def git(*args):
+def git(*args: str):
     if os.path.exists("git_dissect_test.py"):
         raise RuntimeError("Cowardly refusing to stomp on my own git repo")
 
