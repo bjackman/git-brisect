@@ -481,10 +481,15 @@ def create_history_cwd(dag: Dag):
             # sub-ordering of the numeric ordering of the node IDs so min will
             # do the trick.
             git("checkout", str(min(p.i for p in node.parents)))
+            old_head = git_dissect.rev_parse("HEAD")
         if len(node.parents) <= 1:
             commits[node.i] = commit(msg=str(node.i))
+            if node.parents and git_dissect.rev_parse("HEAD") == old_head:
+                raise RuntimeError(f"While committing {node}")
         else:
             commits[node.i] = merge("--no-ff", *[commits[p.i] for p in node.parents])
+            if node.parents and git_dissect.rev_parse("HEAD") == old_head:
+                raise RuntimeError(f"While merging {node}")
         git("tag", str(node.i))
 
     # Actually we only need to do this for the leaves but we don't have those to
