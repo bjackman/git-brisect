@@ -610,12 +610,12 @@ class TestEndToEnd(unittest.TestCase):
         cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
 
         args_cases = [
-            ["0..4", "--"] + cmd,
-            ["4 ^0", "--"] + cmd,
-            ["--no-worktrees", "0..4", "--"] + cmd,
-            ["--num-threads", "4", "0..4", "--"] + cmd,
-            ["-n", "4", "0..4", "--"] + cmd,
-            ["-n4", "0..4", "--"] + cmd,
+            ["git-dissect", "0..4", "--"] + cmd,
+            ["git-dissect", "4 ^0", "--"] + cmd,
+            ["git-dissect", "--no-worktrees", "0..4", "--"] + cmd,
+            ["git-dissect", "--num-threads", "4", "0..4", "--"] + cmd,
+            ["git-dissect", "-n", "4", "0..4", "--"] + cmd,
+            ["git-dissect", "-n4", "0..4", "--"] + cmd,
         ]
         for args in args_cases:
             with self.subTest(args=args):
