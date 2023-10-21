@@ -27,6 +27,7 @@ def git(*args):
     if os.path.exists("git_dissect_test.py"):
         raise RuntimeError("Cowardly refusing to stomp on my own git repo")
 
+    logging.debug(f"git {' '.join(args)}")
     res = subprocess.run(("git",) + args, capture_output=True)
     try:
         res.check_returncode()
@@ -602,8 +603,12 @@ class TestWithHypothesis(GitDissectTest):
         # commits to be their own ancestor); if it is then HEAD is "broken".
         cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
                f"! git merge-base --is-ancestor {case.culprit} HEAD")
-        result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd])
-        self.assertEqual(self.describe(result), str(case.culprit))
+        try:
+            result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd])
+            self.assertEqual(self.describe(result), str(case.culprit))
+        except:
+            self.logger.info("\n" + git("lgg"))
+            raise
 
         with open(tested_commits_path) as f:
             tested_commits = f.readlines()

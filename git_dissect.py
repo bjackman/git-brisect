@@ -55,7 +55,10 @@ def merge_base(*commits):
     return run_cmd(["git", "merge-base"] + list(commits)).strip()
 
 def describe(rev):
-    return run_cmd(["git", "describe", "--tags", "--always", rev]).strip()
+    r = run_cmd(["git", "describe", "--tags", "--always", rev]).strip()
+    if rev != r:
+        logger.debug(f"Describe {rev}: [{r}]")
+    return r
 
 # First line of commit message (git calls this the "subject" but that's
 # confusing).
