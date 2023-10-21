@@ -718,8 +718,6 @@ class TestEndToEnd(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # threading.excepthook = git_dissect.excepthook
-
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
 

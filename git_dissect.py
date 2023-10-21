@@ -19,6 +19,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import traceback
 import typing
 import queue
 import shutil
@@ -251,6 +252,14 @@ class WorkerPool:
                     self._cancel(commit_hash)
 
     def _work(self, workdir: pathlib.Path):
+        # Desperate workaround to try and get Python to show me the fucking
+        # error I dunno.
+        try:
+            self.__work(workdir)
+        except Exception:
+            logger.info(traceback.format_exc())
+
+    def __work(self, workdir: pathlib.Path):
         while True:
             with self._cond:
                 while not self._in_q and not self._done:
@@ -372,12 +381,6 @@ def do_dissect(args, pool, full_range):
         untested_ranges = [s for s in untested_ranges if s.midpoint() in full_range.commits()]
 
     return rev_parse(full_range.include)
-
-def excepthook(*args, **kwargs):
-    threading.__excepthook__(*args, **kwargs)  # pytype: disable=module-attr
-    # Not sure exactly why sys.exit doesn't work here. This is cargo-culted from:
-    # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
-    os._exit(1)
 
 def dissect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True):
     tmpdir = None
@@ -521,10 +524,6 @@ def main(argv: list[str], output: TextIO) -> int:
     return 0
 
 if __name__ == "__main__":
-    # Fix Python's threading system so that when a thread has an unhandled
-    # exception the program exits.
-    # threading.excepthook = excepthook
-
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
 
