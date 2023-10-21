@@ -753,10 +753,6 @@ class TestEndToEnd(unittest.TestCase):
                 got = f.read()
                 self.assertEqual(got, want, f"For path: {path}")
 
-        # TODO: test dir race detection
-        # TODO: test different arg setups
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")

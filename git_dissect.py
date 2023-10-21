@@ -163,9 +163,7 @@ class RevRange:
 
         before = RevRange(exclude=self.exclude, include=commit)
         # To ensure the two subranges are non-overlapping, exclude their common
-        # ancestor. ACTUALLY, is there a bug here? We generate two ranges with
-        # no gap between them; normally a gap between ranges represents some
-        # knowledge that we have, but not here.
+        # ancestor.
         mb = merge_base(self.include, commit)
         after = RevRange(exclude=self.exclude + [commit, mb], include=self.include)
         return before, after
@@ -204,6 +202,8 @@ class WorkerPool:
     # doesn't seem to have an equivalent to closing a Go channel so you need
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
+    # OK, I think Python's new async stuff would be the way to go here. But... I
+    # can't be bothered to learn that.
 
     def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path], out_dir: pathlib.Path):
         # Used to synchronize enqueuement with the worker threads.
@@ -226,8 +226,6 @@ class WorkerPool:
         with self._cond:
             self._in_q.append(rev_parse(rev))
             logger.info(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
-            # TODO: Because we use the same condition variable for input and
-            # output, we need notify_all. Rework this to avoid that.
             self._cond.notify_all()
 
     def num_pending(self):
@@ -453,7 +451,6 @@ def test_every_commit(rev_range: str, args: Iterable[str],
 def parse_args(argv: list[str]):
     parser = argparse.ArgumentParser(
         description="git bisect and rebase --exec, but with parallelism")
-    # TODO: add short args (not sure how to do this, no docs on the plane!)
     def positive_int(val):
         i = int(val)
         if i < 0:
@@ -538,17 +535,16 @@ if __name__ == "__main__":
 #
 # Support reusing existing worktrees
 #
-# Handle Ctrl-C and ensure worktrees are cleaned up
-#
-# replacing args? Original idea was to have placeholders like with find
-#  --exec. But can't remember why I thought this was useful.
-#  One usage of this would be to implement something you could pass to make's
-#  --jobserver-fd.
-#
-# capture output
+# Improve output formatting:
+#  - Explain progress to the user
+#  - Support a -v arg or something instead of just spamming the debug logs
+#  - Turn exceptions into error messages instead of just spamming a useless
+#    backtrace.
 #
 # option to test based on tree? Worth checking if reverts result in the same tree.
 #
 # ability to watch a range like local CI
 #
-# look into async and see if we can drop the ugly thread pool
+# better error handling if things go wrong in the worker threads
+#
+# --jobserver-fd thing
