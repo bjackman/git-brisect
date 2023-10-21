@@ -8,6 +8,7 @@ import io
 import logging
 import unittest
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -164,6 +165,7 @@ class TestBisection(GitDissectTestWithRepo):
 
         git_dissect.dissect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
                             use_worktrees=use_worktrees,
+                            out_dir=pathlib.Path.cwd(),
                             num_threads=4)
         runs = self.script_runs()
 
@@ -219,7 +221,8 @@ class TestBisection(GitDissectTestWithRepo):
         def run_dissect():
             nonlocal dissect_result
             dissect_result = git_dissect.dissect(
-                f"{commits[0]}..{commits[-1]}", args=["bash", "./run.sh"], num_threads=num_threads)
+                f"{commits[0]}..{commits[-1]}", args=["bash", "./run.sh"], num_threads=num_threads,
+                out_dir=pathlib.Path.cwd())
 
         thread = threading.Thread(target=run_dissect)
         thread.start()
@@ -298,7 +301,8 @@ class TestTestEveryCommit(GitDissectTestWithRepo):
 
         results = git_dissect.test_every_commit(
             f"{commits[0]}..{commits[-1]}",
-            ["sh", "./run.sh"])
+            ["sh", "./run.sh"],
+            out_dir=pathlib.Path.cwd())
         want = list(reversed(list(zip(commits[1:], [
             0, 0, 1, 1, 1, 0
         ]))))
@@ -598,7 +602,8 @@ class TestWithHypothesis(GitDissectTest):
         # commits to be their own ancestor); if it is then HEAD is "broken".
         cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
                f"! git merge-base --is-ancestor {case.culprit} HEAD")
-        result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd])
+        result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd],
+                                     out_dir=pathlib.Path.cwd())
         self.assertEqual(self.describe(result), str(case.culprit))
 
         with open(tested_commits_path) as f:
@@ -614,9 +619,9 @@ class TestEndToEnd(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(tmpdir))
         os.chdir(tmpdir)
         self.logger = logging.getLogger(self.id())
+        create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
 
     def test_bisect_smoke(self):
-        create_history_cwd(Dag(edges=frozenset({(0, 1), (1, 2), (2, 3), (3, 4)}), num_nodes=5))
         # "Bug" is in commit 2.
         cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
 
@@ -638,9 +643,82 @@ class TestEndToEnd(unittest.TestCase):
                                 f'First bad commit is {commit_hash} ("2")',
                                 f"Args: {args}")
 
+    def test_out_dir_contents(self):
+        out_dir = pathlib.Path.cwd() / "out_dir"
+        out_dir.mkdir()
+
+        cmd = ["bash", "-c", f"""
+            tag=$(git describe --tags HEAD)
+            echo "hello from "$tag" stdout"
+            echo "hello from "$tag" stderr" 1>&2
+            echo "hello from "$tag" output" > $GIT_DISSECT_OUTPUT_DIR/t.txt
+            case "$tag" in
+                0|1)
+                    exit 0
+                    ;;
+                2)
+                    # Commit 2 is the culprit. To guarantee that 3's test gets
+                    # started before we can determine the culprit, its test
+                    # hanges until a magic file is touched.
+                    while [ ! -f {os.getcwd()}/unhang ]; do
+                        sleep 0.1
+                    done
+                    exit 1
+                    ;;
+                3)
+                    read    # Commit 3's test runs forever
+                    ;;
+            esac
+        """]
+
+        # Run the dissection in the background
+        dissect_result = None
+        def run_dissect():
+            nonlocal dissect_result
+            args = ["git-dissect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
+            dissect_result = git_dissect.main(args, io.StringIO())
+        thread = threading.Thread(target=run_dissect)
+        thread.start()
+        self.addCleanup(thread.join)
+
+        # Wait for test 3's output to exist so we know that test got started
+        # before the culprit was detected, so we can assert its cancelation is
+        # reported.
+        test_3_output = out_dir / git_dissect.rev_parse("3") / "output" / "t.txt"
+        while thread.is_alive() and not test_3_output.exists():
+            time.sleep(0.1)
+        self.assertTrue(test_3_output.exists())
+
+        # Unblock test 2; now the whole bisection should complete.
+        with open("unhang", "w") as f:
+            pass
+        thread.join()
+
+        # Note we can't really assert on comit 0's output. But 1 and 2 must have
+        # been tested in order to detect the culprit, and we have carefully
+        # arranged things so that 3 must also get tested.
+        for rev, sub_path, want in [
+            ("1", "stdout.txt", "hello from 1 stdout\n"),
+            ("1", "stderr.txt", "hello from 1 stderr\n"),
+            ("1", "output/t.txt", "hello from 1 output\n"),
+            ("1", "returncode.txt", "0"),
+            ("2", "stdout.txt", "hello from 2 stdout\n"),
+            ("2", "stderr.txt", "hello from 2 stderr\n"),
+            ("2", "output/t.txt", "hello from 2 output\n"),
+            ("2", "returncode.txt", "1"),
+            ("3", "CANCELED", ""),
+        ]:
+            path = out_dir / git_dissect.rev_parse(rev) / sub_path
+            with path.open() as f:
+                got = f.read()
+                self.assertEqual(got, want, f"For path: {path}")
+
+        # TODO: test dir race detection
+        # TODO: test different arg setups
+
 
 if __name__ == "__main__":
-    threading.excepthook = git_dissect.excepthook
+    # threading.excepthook = git_dissect.excepthook
 
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")

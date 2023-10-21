@@ -11,6 +11,7 @@ git-dissect [--[no-]worktrees] $*
 
 import argparse
 import dataclasses
+import datetime
 import logging
 import os
 import pathlib
@@ -204,15 +205,16 @@ class WorkerPool:
     # some out-of-band "done" signal and at that point it seems cleaner to just
     # roll a custom mechanism from scratch.
 
-    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path]):
+    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path], out_dir: pathlib.Path):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
-        self._in_q = []
+        self._in_q = []  # Revs are always described by commit hash in this queue.
         self._out_q = []
         self._threads = []
         self._subprocesses = {}
         self._done = False
         self._test_cmd = test_cmd
+        self._out_dir = out_dir
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -222,7 +224,7 @@ class WorkerPool:
 
     def enqueue(self, rev):
         with self._cond:
-            self._in_q.append(rev)
+            self._in_q.append(rev_parse(rev))
             logger.info(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
             # TODO: Because we use the same condition variable for input and
             # output, we need notify_all. Rework this to avoid that.
@@ -236,13 +238,18 @@ class WorkerPool:
         with self._cond:
             return len(self._out_q)
 
+    def _cancel(self, commit_hash: str):
+        with (self._out_dir / commit_hash / "CANCELED").open("w"):
+            pass
+        # TODO: Does this work on Windows?
+        self._subprocesses[commit_hash].send_signal(signal.SIGINT)
+
     def cancel(self, range: RevRange):
         with self._cond:
             self._in_q = list(r for r in self._in_q if r not in range.commits())
-            for rev, p in self._subprocesses.items():
-                if rev in range.commits():
-                    # TODO: Does this work on Windows?
-                    self._subprocesses[rev].send_signal(signal.SIGINT)
+            for commit_hash in self._subprocesses:
+                if commit_hash in range.commits():
+                    self._cancel(commit_hash)
 
     def _work(self, workdir: pathlib.Path):
         while True:
@@ -252,27 +259,41 @@ class WorkerPool:
                 if self._done:
                     return
 
-                rev = self._in_q[0]
+                commit_hash = self._in_q[0]
                 self._in_q = self._in_q[1:]
 
-                # TODO: Capture stdout and stderr somewhere useful.
-                run_cmd(["git", "-C", str(workdir), "checkout", rev])
+                commit_out_dir = self._out_dir / commit_hash
+                commit_out_dir.mkdir()
+                stderr = (commit_out_dir / "stderr.txt").open("w")
+                stdout = (commit_out_dir / "stdout.txt").open("w")
+                env = dict(os.environ)
+                extra_output_dir = commit_out_dir / "output"
+                extra_output_dir.mkdir()
+                env["GIT_DISSECT_OUTPUT_DIR"] = str(extra_output_dir)
+
+                logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
+
+                run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        stderr=stderr, stdout=stdout, env=env)
                 except (PermissionError, FileNotFoundError) as e:
-                    logging.info(f"Error running at {rev} ({e}), returning code 1")
-                    self._out_q.append((rev, 1))
+                    logging.info(f"Error running at {commit_hash} ({e}), returning code 1")
+                    self._out_q.append((commit_hash, 1))
                     self._cond.notify_all()
                     continue
 
-                self._subprocesses[rev] = p
+                self._subprocesses[commit_hash] = p
 
             p.communicate()
+            with (commit_out_dir / "returncode.txt").open("w") as f:
+                f.write(str(p.returncode))
             with self._cond:
-                self._out_q.append((rev, p.returncode))
-                del self._subprocesses[rev]
+                self._out_q.append((commit_hash, p.returncode))
+                del self._subprocesses[commit_hash]
+                stdout.close()
+                stderr.close()
                 self._cond.notify_all()
 
     def wait(self):
@@ -285,8 +306,8 @@ class WorkerPool:
 
     def interrupt_and_join(self):
         with self._cond:
-            for p in self._subprocesses.values():
-                p.send_signal(signal.SIGINT)
+            for commit_hash in self._subprocesses:
+                self._cancel(commit_hash)
             self._done = True
             self._cond.notify_all()
         for t in self._threads:
@@ -359,7 +380,7 @@ def excepthook(*args, **kwargs):
     # https://github.com/rfjakob/unhandled_exit/blob/e0d863a33469/unhandled_exit/__init__.py#L13
     os._exit(1)
 
-def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=True):
+def dissect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True):
     tmpdir = None
     if use_worktrees:
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -373,8 +394,9 @@ def dissect(rev_range: str, args: Iterable[str], num_threads=8, use_worktrees=Tr
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         logger.info("...Done setting up worktrees.")
-        pool = WorkerPool(args,
-                          worktrees or [pathlib.Path.cwd() for _ in range(num_threads)])
+        pool = WorkerPool(test_cmd=args,
+                          workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
+                          out_dir=out_dir)
         return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
@@ -400,6 +422,7 @@ def do_test_every_commit(pool, commits):
 
 # include and exclude specify the set of commits to test.
 def test_every_commit(rev_range: str, args: Iterable[str],
+                      out_dir: pathlib.Path,
                       num_threads=8, use_worktrees=True):
     commits = RevRange.from_string(rev_range).commits()
     tmpdir = None
@@ -413,8 +436,9 @@ def test_every_commit(rev_range: str, args: Iterable[str],
     try:
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
-        pool = WorkerPool(args,
-                          worktrees or [os.getcwd() for _ in range(num_threads)])
+        pool = WorkerPool(test_cmd=args,
+                          workdirs=worktrees or [os.getcwd() for _ in range(num_threads)],
+                          out_dir=out_dir)
         return do_test_every_commit(pool, commits)
     finally:
         if pool:
@@ -443,6 +467,19 @@ def parse_args(argv: list[str]):
         help=(
             "By default, each thread runs the test in its own worktree. " +
             "Set this to disable that, and just run parallel tests in the main git tree"))
+    parser.add_argument("-o", "--out-dir", type=pathlib.Path, help=(
+        'Extant directory to store output in. Each commit gets a subdirectory, in there' +
+        'will be a returncode.txt, stderr.txt and stdout.txt. If the test was' +
+        'cancelled, an empty file named CANCELED (with one "L"!) will be next to them. There is' +
+        'also a subdirectory called output/ which is a place for the test command' +
+        'to dump extra artifacts; the path of this directory is passed as the' +
+        'GIT_DISSECT_OUTPUT_DIR environment veriable. If this arg is not set ' +
+        'an output directory will be created in --out-dir-in.'
+    ))
+    parser.add_argument("-i", "--out-dir-in", type=pathlib.Path, default=tempfile.gettempdir(), help=(
+        'Extant parent directory for output directory if --out-dir is not set. See ' +
+        '--out-dir for info about the output directory.'
+    ))
     parser.add_argument("range", help=(
         'Commit range to bisect, using syntax described in SPECIFYING RANGES ' +
         'section of gitrevisions(7), but without the ... syntax option. Must have ' +
@@ -455,21 +492,39 @@ def parse_args(argv: list[str]):
 
     return parser.parse_args(argv)
 
+def make_out_dir(args) -> pathlib.Path:
+    if args.out_dir:
+        out_dir = args.out_dir
+    else:
+        # Sorry knights of ISO 8601, colons aren't allowed in Windows filesnames.
+        timestamp  = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+        out_dir = args.out_dir_in / ("output-" + timestamp)
+        try:
+            os.mkdir(out_dir)
+        except FileExistsError:
+            out_dir = pathlib.Path(
+                tempfile.mkdtemp(prefix="output-" + timestamp, dir=args.out_dir_in))
+
+    return out_dir
+
 def main(argv: list[str], output: TextIO) -> int:
     args = parse_args(argv[1:])
+    out_dir = make_out_dir(args)
+
     if False:  # args.test_every_commit:
         raise NotImplementedError("soz")
     else:
         result = dissect(args.range, args.cmd,
                          num_threads=args.num_threads,
-                         use_worktrees=not args.no_worktrees)
+                         use_worktrees=not args.no_worktrees,
+                         out_dir=out_dir)
         output.write(f'First bad commit is {result} ("{commit_title(result)}")')
     return 0
 
 if __name__ == "__main__":
     # Fix Python's threading system so that when a thread has an unhandled
     # exception the program exits.
-    threading.excepthook = excepthook
+    # threading.excepthook = excepthook
 
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
