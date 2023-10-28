@@ -537,21 +537,3 @@ if __name__ == "__main__":
                         format="%(asctime)s %(levelname)-6s %(message)s")
 
     sys.exit(main(sys.argv, sys.stdout, datetime.datetime.now()))
-
-# TODO
-#
-# Support reusing existing worktrees
-#
-# Improve output formatting:
-#  - Explain progress to the user
-#  - Support a -v arg or something instead of just spamming the debug logs
-#  - Turn exceptions into error messages instead of just spamming a useless
-#    backtrace.
-#
-# option to test based on tree? Worth checking if reverts result in the same tree.
-#
-# ability to watch a range like local CI
-#
-# better error handling if things go wrong in the worker threads
-#
-# --jobserver-fd thing

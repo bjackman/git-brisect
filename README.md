@@ -8,6 +8,9 @@ Now `git` has a `brisect` subcommand.
 
 To use it, run `git brisect $bad_commit..$good_commit -- <test command>`.
 
+I expect it to work on any Unix, and Windows _might_ work (let me know if you
+try it!).
+
 ## Writing the test command
 
 The test command should exit with code 0 if the commit is "good", and a non-zero
@@ -66,14 +69,51 @@ better when the time to complete tests of different commits varies, for example
 when running stress-tests that detect a bug by repeating some operation millions
 of times over the course of several minutes.
 
+It also has more advanced logic to select which commits to prioritize testing
+for; it ought to do a better job htan `git-pisect` on nonlinear histories,
+although this is actually quite a tricky problem and it's still far from
+optimal. See the code comments if you're interested!
 
-- why not a drop-in for `git-bisect`
-- thoughts about the code
-- missing features
+It was originally called `git-dissect` but then I realised [that already
+exists](https://github.com/talshorer/git-dissect)! That is instead focussed on
+distributing the testing across multiple hosts. You could also use `git-brisect`
+to do that if you wanted to, you'd just need to do some more scripting of your
+own. If you're interested in that, see the `--help` for the `--no-worktrees`
+option.
 
-##
+`git-brisect` is not a drop-in replacement for `git-bisect`: Instead of
+specifying a range for `git bisect` it is hard coded as the difference between a
+set of `refs/bisect/good-*` and a `refs/bisect/bad`. This allows the logic to be
+executed step by step across multiple command invocations. That's a helpful
+design for the interactive nature of `git-bisect`, but `git-brisect` isn't
+interactive so instead we just pass a range. This allows `git-brisect` to leave
+the repository totally untouched (aside from creating worktrees). You could even
+run a normal `git-bisect` in your repo while `git-brisect` is running in the
+background.
 
-`git-brisect` is not a drop-in replacement for `git-bissect`
+## Shortcomings & Missing Features
+
+ - Want better output formatting.
+ - Want an equivalent to `git bisect skip`.
+ - Want the ability to re-use existing worktrees instead of creating and tearing down
+   special ones.
+ - Want to cache results based on the tree hash: most tests probably don't need
+   to be repeated if the actual code is the same. This would need to be enabled
+   by a flag.
+ - Would be helpful to have a flag like `--test-good` where instead of trusting
+   the user we also test the tip commit. It would be prioritized for initial
+   testing, this would help catch the case that there's something wrong with the
+   test command, or the user is mistaken about the test range.
+ - The error handling is overall pretty ropey. I'm sure users will get hit with
+   backtraces. Also the multithreading has no way to propagate unexpected errors
+   back to the main thread so it's probably possible to make this thing hang.
+ - Want a way to spin up a pipe that can be passed in to `make`'s
+  `--jobserver-fd` thing.
+ - I think the test coverage of the actual algorithm is pretty good. But not for
+   the end-to-end logic, like it's probably possible to confuse this thing with
+   invalid inputs. Also the test code is quite a mess, but whatever.
+ - There's some dead code in there for an incomplete `--test-every-commit`
+   feature, I think I will probably still want to add that at some point.
 
 ## Running the tests
 
