@@ -41,7 +41,7 @@ The test command is not run via the shell, so you might want to use `bash -c
 <commands>` or something.
 
 If your tests produce other outputs that might be interesting to examine later,
-the command can store them in `$GIT_brisect_OUTPUT_DIR` which is unique for each
+the command can store them in `$GIT_BRISECT_OUTPUT_DIR` which is unique for each
 commit (but remember, the command isn't run via the shell). You don't need to
 create the directory, it already exists. Only files that you create go in here;
 you don't need to worry about filename collisions.
@@ -61,7 +61,7 @@ commit hash.
  - `stderr.txt` and `stdout.txt` contain what you expect.
  - `returncode.txt` has the returncode as a decimal string.
  - `output/` contains anything your test command dropped into
-   `$GIT_brisect_OUTPUT_DIR`.
+   `$GIT_BRISECT_OUTPUT_DIR`.
 
 ## Discussion
 

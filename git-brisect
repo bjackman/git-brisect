@@ -265,13 +265,13 @@ class WorkerPool:
                 env = dict(os.environ)
                 extra_output_dir = commit_out_dir / "output"
                 extra_output_dir.mkdir()
-                env["GIT_brisect_OUTPUT_DIR"] = str(extra_output_dir)
+                env["GIT_BRISECT_OUTPUT_DIR"] = str(extra_output_dir)
 
                 logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
 
                 if self._checkout_test_rev:
                     run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
-                env["GIT_brisect_TEST_REVISION"] = commit_hash
+                env["GIT_BRISECT_TEST_REVISION"] = commit_hash
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -472,7 +472,7 @@ def parse_args(argv: list[str]):
             "Set this to disable that, and just run parallel tests in the main " +
             "git tree. This will save a little time if you don't actually need " +
             "the source code to run your tests, e.g. if you're just sending test " +
-            "requests to a remote CI server. The GIT_brisect_TEST_REVISION " +
+            "requests to a remote CI server. The GIT_BRISECT_TEST_REVISION " +
             "environment variable will tell your command what commit is under " +
             "test."))
     parser.add_argument("-o", "--out-dir", type=pathlib.Path, help=(
@@ -481,7 +481,7 @@ def parse_args(argv: list[str]):
         'cancelled, an empty file named CANCELED (with one "L"!) will be next to them. There is ' +
         'also a subdirectory called output/ which is a place for the test command ' +
         'to dump extra artifacts; the path of this directory is passed as the ' +
-        'GIT_brisect_OUTPUT_DIR environment veriable. If this arg is not set ' +
+        'GIT_BRISECT_OUTPUT_DIR environment veriable. If this arg is not set ' +
         'an output directory will be created in --out-dir-in.'
     ))
     parser.add_argument("-i", "--out-dir-in", type=pathlib.Path, default=tempfile.gettempdir(), help=(

@@ -642,7 +642,7 @@ class TestEndToEnd(unittest.TestCase):
         # "Bug" is in commit 2.
         c = "! git merge-base --is-ancestor 2 {}"
         cmd = ["bash", "-c", c.format("HEAD")]
-        cmd_no_head = ["bash", "-c", c.format("$GIT_brisect_TEST_REVISION")]
+        cmd_no_head = ["bash", "-c", c.format("$GIT_BRISECT_TEST_REVISION")]
 
         args_cases = [
             ["git-brisect", "0..4", "--"] + cmd,
@@ -696,7 +696,7 @@ class TestEndToEnd(unittest.TestCase):
             tag=$(git describe --tags HEAD)
             echo "hello from "$tag" stdout"
             echo "hello from "$tag" stderr" 1>&2
-            echo "hello from "$tag" output" > $GIT_brisect_OUTPUT_DIR/t.txt
+            echo "hello from "$tag" output" > $GIT_BRISECT_OUTPUT_DIR/t.txt
             case "$tag" in
                 0|1)
                     exit 0
