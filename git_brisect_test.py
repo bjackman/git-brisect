@@ -21,12 +21,12 @@ from typing import Iterable, Optional
 
 import hypothesis
 
-import git_dissect
+import git_brisect
 
 # Why does the test have a different style git wrapper function than the
 # main code? It just does, OK! Stop asking annoying questions!
 def git(*args: str):
-    if os.path.exists("git_dissect_test.py"):
+    if os.path.exists("git_brisect_test.py"):
         raise RuntimeError("Cowardly refusing to stomp on my own git repo")
 
     res = subprocess.run(("git",) + args, capture_output=True)
@@ -48,7 +48,7 @@ def merge(msg: str, parents: list[str]):
     git("merge", "-m", msg, "--no-ff", *parents)
     return git("rev-pase", "HEAD")
 
-class GitDissectTest(unittest.TestCase):
+class GitbrisectTest(unittest.TestCase):
     logger: logging.Logger
 
     def setUp(self):
@@ -87,7 +87,7 @@ class GitDissectTest(unittest.TestCase):
             return []
         return self.read_stripped_lines("output.txt")
 
-class GitDissectTestWithRepo(GitDissectTest):
+class GitbrisectTestWithRepo(GitbrisectTest):
     def setUp(self):
         super().setUp()
 
@@ -96,7 +96,7 @@ class GitDissectTestWithRepo(GitDissectTest):
         os.chdir(tmpdir)
         git("init")
 
-class RevRangeTest(GitDissectTestWithRepo):
+class RevRangeTest(GitbrisectTestWithRepo):
     def setUp(self):
         super().setUp()
 
@@ -107,15 +107,15 @@ class RevRangeTest(GitDissectTestWithRepo):
 
     def test_from_string(self):
         cases = [
-            ("foo", git_dissect.RevRange(exclude=[], include="foo")),
-            ("foo ^bar", git_dissect.RevRange(exclude=["bar"], include="foo")),
-            ("^bar foo", git_dissect.RevRange(exclude=["bar"], include="foo")),
-            ("foo ^bar ^baz", git_dissect.RevRange(exclude=["bar", "baz"], include="foo")),
-            ("bar..foo", git_dissect.RevRange(exclude=["bar"], include="foo")),
+            ("foo", git_brisect.RevRange(exclude=[], include="foo")),
+            ("foo ^bar", git_brisect.RevRange(exclude=["bar"], include="foo")),
+            ("^bar foo", git_brisect.RevRange(exclude=["bar"], include="foo")),
+            ("foo ^bar ^baz", git_brisect.RevRange(exclude=["bar", "baz"], include="foo")),
+            ("bar..foo", git_brisect.RevRange(exclude=["bar"], include="foo")),
         ]
         for in_str, want in cases:
             with self.subTest(in_str=in_str):
-                got = git_dissect.RevRange.from_string(in_str)
+                got = git_brisect.RevRange.from_string(in_str)
                 self.assertEqual(want.include, got.include)
                 self.assertEqual(want.exclude, got.exclude)
 
@@ -129,11 +129,11 @@ class RevRangeTest(GitDissectTestWithRepo):
         ]
         for in_str in cases:
             with self.subTest(in_str=in_str):
-                with self.assertRaises(git_dissect.BadRangeError):
-                    got = git_dissect.RevRange.from_string(in_str)
+                with self.assertRaises(git_brisect.BadRangeError):
+                    got = git_brisect.RevRange.from_string(in_str)
                     self.logger.info(f"Got: {got}")
 
-class TestBisection(GitDissectTestWithRepo):
+class TestBisection(GitbrisectTestWithRepo):
     def _run_worktree_test(self, use_worktrees: bool):
         """Run a test that should result in multiple worktrees being used.
 
@@ -164,7 +164,7 @@ class TestBisection(GitDissectTestWithRepo):
 
         self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
-        git_dissect.dissect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
+        git_brisect.brisect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
                             use_worktrees=use_worktrees,
                             out_dir=pathlib.Path.cwd(),
                             num_threads=4)
@@ -217,15 +217,15 @@ class TestBisection(GitDissectTestWithRepo):
 
         self.logger.info("\n" + git("log", "--graph", "--all", "--oneline"))
 
-        # Run the dissection in the background
-        dissect_result = None
-        def run_dissect():
-            nonlocal dissect_result
-            dissect_result = git_dissect.dissect(
+        # Run the brisection in the background
+        brisect_result = None
+        def run_brisect():
+            nonlocal brisect_result
+            brisect_result = git_brisect.brisect(
                 f"{commits[0]}..{commits[-1]}", args=["bash", "./run.sh"], num_threads=num_threads,
                 out_dir=pathlib.Path.cwd())
 
-        thread = threading.Thread(target=run_dissect)
+        thread = threading.Thread(target=run_brisect)
         thread.start()
 
         # Gets the indexes of the commits whose test scripts are currently
@@ -261,8 +261,8 @@ class TestBisection(GitDissectTestWithRepo):
         self.logger.info("joining")
         thread.join()
 
-        # If this fails then dissect() must have crashed.
-        self.assertIsNotNone(dissect_result)
+        # If this fails then brisect() must have crashed.
+        self.assertIsNotNone(brisect_result)
 
     def test_no_parallelism(self):
         self._test_thread_limit(1)
@@ -284,7 +284,7 @@ class TestBisection(GitDissectTestWithRepo):
     #
     #  ensure things don't break under long enqueuements
 
-class TestTestEveryCommit(GitDissectTestWithRepo):
+class TestTestEveryCommit(GitbrisectTestWithRepo):
     def test_smoke(self):
         self.write_pass_fail_script(fail=False)
         commits = []
@@ -300,7 +300,7 @@ class TestTestEveryCommit(GitDissectTestWithRepo):
 
         self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
-        results = git_dissect.test_every_commit(
+        results = git_brisect.test_every_commit(
             f"{commits[0]}..{commits[-1]}",
             ["sh", "./run.sh"],
             out_dir=pathlib.Path.cwd())
@@ -310,56 +310,56 @@ class TestTestEveryCommit(GitDissectTestWithRepo):
 
         self.assertCountEqual(results, want)
 
-class TestRevRange(GitDissectTest):
+class TestRevRange(GitbrisectTest):
     def test_full_spec(self):
         # Hack: when specifying the range in full we don't actually need access
         # to the repo so we dont bother using "real" refs here.
         # This would fail if you tried to access "commits()" etc.
 
-        r = git_dissect.RevRange.from_string("foo ^bar ^baz")
+        r = git_brisect.RevRange.from_string("foo ^bar ^baz")
         self.assertEqual(r.include, "foo")
         self.assertCountEqual(r.exclude, ["bar", "baz"])
 
-        r = git_dissect.RevRange.from_string("foo   ^bar") # multiple spaces
+        r = git_brisect.RevRange.from_string("foo   ^bar") # multiple spaces
         self.assertEqual(r.include, "foo")
         self.assertCountEqual(r.exclude, ["bar"])
 
-        r = git_dissect.RevRange.from_string("^bar foo ^baz")
+        r = git_brisect.RevRange.from_string("^bar foo ^baz")
         self.assertEqual(r.include, "foo")
         self.assertCountEqual(r.exclude, ["bar", "baz"])
 
-        r = git_dissect.RevRange.from_string("^bar ^baz foo")
+        r = git_brisect.RevRange.from_string("^bar ^baz foo")
         self.assertEqual(r.include, "foo")
         self.assertCountEqual(r.exclude, ["bar", "baz"])
 
-        r = git_dissect.RevRange.from_string("foo")
+        r = git_brisect.RevRange.from_string("foo")
         self.assertEqual(r.include, "foo")
         self.assertCountEqual(r.exclude, [])
 
-        with self.assertRaises(git_dissect.BadRangeError):
-            _ = git_dissect.RevRange.from_string("^foo")
+        with self.assertRaises(git_brisect.BadRangeError):
+            _ = git_brisect.RevRange.from_string("^foo")
 
-        with self.assertRaises(git_dissect.BadRangeError):
-            _ = git_dissect.RevRange.from_string("foo bar")
+        with self.assertRaises(git_brisect.BadRangeError):
+            _ = git_brisect.RevRange.from_string("foo bar")
 
     def test_dot_dot(self):
-        r = git_dissect.RevRange.from_string("foo..bar")
+        r = git_brisect.RevRange.from_string("foo..bar")
         self.assertEqual(r.include, "bar")
         self.assertCountEqual(r.exclude, ["foo"])
 
-        r = git_dissect.RevRange.from_string("foo..bar ^baz")
+        r = git_brisect.RevRange.from_string("foo..bar ^baz")
         self.assertEqual(r.include, "bar")
         self.assertCountEqual(r.exclude, ["foo", "baz"])
 
-        r = git_dissect.RevRange.from_string("^baz foo..bar")
+        r = git_brisect.RevRange.from_string("^baz foo..bar")
         self.assertEqual(r.include, "bar")
         self.assertCountEqual(r.exclude, ["foo", "baz"])
 
-        with self.assertRaises(git_dissect.BadRangeError):
-            _ = git_dissect.RevRange.from_string("foo..bar..baz")
+        with self.assertRaises(git_brisect.BadRangeError):
+            _ = git_brisect.RevRange.from_string("foo..bar..baz")
 
-        with self.assertRaises(git_dissect.BadRangeError):
-            _ = git_dissect.RevRange.from_string("foo..bar baz")
+        with self.assertRaises(git_brisect.BadRangeError):
+            _ = git_brisect.RevRange.from_string("foo..bar baz")
 
 
 @dataclasses.dataclass
@@ -512,7 +512,7 @@ def bisect_cases(draw, dags):
     ancestor_id = leaf_ancestors[draw(uints_upto(len(leaf_ancestors) - 1))]
     return BisectCase(dag=dag, culprit=ancestor_id, leaf=leaf_id)
 
-class TestWithHypothesis(GitDissectTest):
+class TestWithHypothesis(GitbrisectTest):
     repo_cache: dict[Dag, str] = {}  # Maps DAGs to repo paths
 
     def setUp(self):
@@ -555,7 +555,7 @@ class TestWithHypothesis(GitDissectTest):
     def test_range_split(self, dag_and_range: tuple[Dag, tuple[int, int]]):
         (dag, (exclude_node, include_node)) = dag_and_range
         self.setup_repo(dag)
-        rev_range = git_dissect.RevRange(exclude=[str(exclude_node)],
+        rev_range = git_brisect.RevRange(exclude=[str(exclude_node)],
                                          include=str(include_node))
         m = rev_range.midpoint()
         if not m:
@@ -566,7 +566,7 @@ class TestWithHypothesis(GitDissectTest):
         # Same for dropping the tip of the range.
         subranges = rev_range.drop_include()
         self.assertCommitSetPartition((s.commits() for s in subranges),
-                                      rev_range.commits() - {git_dissect.rev_parse(rev_range.include)})
+                                      rev_range.commits() - {git_brisect.rev_parse(rev_range.include)})
 
     @hypothesis.given(case=bisect_cases(dags()))
     # Some random examples that detected bugs in the past
@@ -603,7 +603,7 @@ class TestWithHypothesis(GitDissectTest):
         # commits to be their own ancestor); if it is then HEAD is "broken".
         cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
                f"! git merge-base --is-ancestor {case.culprit} HEAD")
-        result = git_dissect.dissect(rev_range=range_spec, args=["bash", "-c", cmd],
+        result = git_brisect.brisect(rev_range=range_spec, args=["bash", "-c", cmd],
                                      out_dir=pathlib.Path.cwd())
         self.assertEqual(self.describe(result), str(case.culprit))
 
@@ -639,31 +639,31 @@ class TestEndToEnd(unittest.TestCase):
         # "Bug" is in commit 2.
         c = "! git merge-base --is-ancestor 2 {}"
         cmd = ["bash", "-c", c.format("HEAD")]
-        cmd_no_head = ["bash", "-c", c.format("$GIT_DISSECT_TEST_REVISION")]
+        cmd_no_head = ["bash", "-c", c.format("$GIT_brisect_TEST_REVISION")]
 
         args_cases = [
-            ["git-dissect", "0..4", "--"] + cmd,
-            ["git-dissect", "4 ^0", "--"] + cmd,
-            ["git-dissect", "--no-worktrees", "0..4", "--"] + cmd_no_head,
-            ["git-dissect", "--num-threads", "4", "0..4", "--"] + cmd,
-            ["git-dissect", "-n", "4", "0..4", "--"] + cmd,
-            ["git-dissect", "-n4", "0..4", "--"] + cmd,
+            ["git-brisect", "0..4", "--"] + cmd,
+            ["git-brisect", "4 ^0", "--"] + cmd,
+            ["git-brisect", "--no-worktrees", "0..4", "--"] + cmd_no_head,
+            ["git-brisect", "--num-threads", "4", "0..4", "--"] + cmd,
+            ["git-brisect", "-n", "4", "0..4", "--"] + cmd,
+            ["git-brisect", "-n4", "0..4", "--"] + cmd,
         ]
         for args in args_cases:
             with self.subTest(args=args):
                 self.logger.info(args)
                 stdout = io.StringIO()
-                git_dissect.main(args, stdout, self.now)
-                commit_hash = git_dissect.rev_parse("2")
+                git_brisect.main(args, stdout, self.now)
+                commit_hash = git_brisect.rev_parse("2")
                 line = self.grep(stdout.getvalue(), '^First bad commit is.*')
                 self.assertEqual(line, f'First bad commit is {commit_hash} ("2")')
 
     def test_out_dir_creation(self):
         def check_out_dir(args):
             stdout = io.StringIO()
-            full_args = ["git-dissect"] + args + [
+            full_args = ["git-brisect"] + args + [
                 "0..4", "--", "bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
-            git_dissect.main(full_args, stdout, self.now)
+            git_brisect.main(full_args, stdout, self.now)
             line = self.grep(stdout.getvalue(), "^Writing output to.*")
             out_dir = line.split(" ")[-1]
             self.assertTrue(os.path.isdir(out_dir))
@@ -693,7 +693,7 @@ class TestEndToEnd(unittest.TestCase):
             tag=$(git describe --tags HEAD)
             echo "hello from "$tag" stdout"
             echo "hello from "$tag" stderr" 1>&2
-            echo "hello from "$tag" output" > $GIT_DISSECT_OUTPUT_DIR/t.txt
+            echo "hello from "$tag" output" > $GIT_brisect_OUTPUT_DIR/t.txt
             case "$tag" in
                 0|1)
                     exit 0
@@ -713,20 +713,20 @@ class TestEndToEnd(unittest.TestCase):
             esac
         """]
 
-        # Run the dissection in the background
-        dissect_result = None
-        def run_dissect():
-            nonlocal dissect_result
-            args = ["git-dissect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
-            dissect_result = git_dissect.main(args, io.StringIO(), self.now)
-        thread = threading.Thread(target=run_dissect)
+        # Run the brisection in the background
+        brisect_result = None
+        def run_brisect():
+            nonlocal brisect_result
+            args = ["git-brisect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
+            brisect_result = git_brisect.main(args, io.StringIO(), self.now)
+        thread = threading.Thread(target=run_brisect)
         thread.start()
         self.addCleanup(thread.join)
 
         # Wait for test 3's output to exist so we know that test got started
         # before the culprit was detected, so we can assert its cancelation is
         # reported.
-        test_3_output = out_dir / git_dissect.rev_parse("3") / "output" / "t.txt"
+        test_3_output = out_dir / git_brisect.rev_parse("3") / "output" / "t.txt"
         while thread.is_alive() and not test_3_output.exists():
             time.sleep(0.1)
         self.assertTrue(test_3_output.exists())
@@ -750,7 +750,7 @@ class TestEndToEnd(unittest.TestCase):
             ("2", "returncode.txt", "1"),
             ("3", "CANCELED", ""),
         ]:
-            path = out_dir / git_dissect.rev_parse(rev) / sub_path
+            path = out_dir / git_brisect.rev_parse(rev) / sub_path
             with path.open() as f:
                 got = f.read()
                 self.assertEqual(got, want, f"For path: {path}")

@@ -82,9 +82,9 @@ class RevRange:
         include = []
 
         # Would generally have multiple tips. If the user can't specify it with
-        # '..' then we can't dissect it.
+        # '..' then we can't brisect it.
         if "..." in s:
-            raise BadRangeError("Can't dissect ranges specified with '...'. Did you mean '..'?")
+            raise BadRangeError("Can't brisect ranges specified with '...'. Did you mean '..'?")
 
         for part in s.split(" "):
             if not part:
@@ -106,10 +106,10 @@ class RevRange:
             # complicate the implementation in some nontrivial ways but I
             # feel it could be done. Would be interesting to find out why
             # the normal git-bisect doesn't allow it.
-            raise BadRangeError(f"Can't dissect with multiple tip revs: {' '.join(include)}")
-        # Trying to debug rare test flake where we somehow dissect the wrong
-        # range. The dissection works fine but the range printed at the
-        # beginning of do_dissect is wrong.
+            raise BadRangeError(f"Can't brisect with multiple tip revs: {' '.join(include)}")
+        # Trying to debug rare test flake where we somehow brisect the wrong
+        # range. The brisection works fine but the range printed at the
+        # beginning of do_brisect is wrong.
         logger.debug(f"RevRange.from_string({s}): include={include} exclude={exclude}")
         return cls(exclude=exclude, include=include[0])
 
@@ -270,13 +270,13 @@ class WorkerPool:
                 env = dict(os.environ)
                 extra_output_dir = commit_out_dir / "output"
                 extra_output_dir.mkdir()
-                env["GIT_DISSECT_OUTPUT_DIR"] = str(extra_output_dir)
+                env["GIT_brisect_OUTPUT_DIR"] = str(extra_output_dir)
 
                 logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
 
                 if self._checkout_test_rev:
                     run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
-                env["GIT_DISSECT_TEST_REVISION"] = commit_hash
+                env["GIT_brisect_TEST_REVISION"] = commit_hash
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -316,8 +316,8 @@ class WorkerPool:
         for t in self._threads:
             t.join()
 
-def do_dissect(args, pool, full_range):
-    logger.info(f"Dissecting range {full_range}")
+def do_brisect(args, pool, full_range):
+    logger.info(f"brisecting range {full_range}")
     # Note: a "culprit" is a commit that is bad and all of whose ancestors are
     # good. There may actually be more than one such commit, but sometimes it's
     # clearer to talk about "the" culprit anyway, that just means the one we're
@@ -377,7 +377,7 @@ def do_dissect(args, pool, full_range):
 
     return rev_parse(full_range.include)
 
-def dissect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True):
+def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True):
     tmpdir = None
     if use_worktrees:
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -395,7 +395,7 @@ def dissect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
                           checkout_test_rev=bool(worktrees),
                           out_dir=out_dir)
-        return do_dissect(args, pool, RevRange.from_string(rev_range))
+        return do_brisect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
             logger.info("Aborting pending tests...")
@@ -470,7 +470,7 @@ def parse_args(argv: list[str]):
             "Set this to disable that, and just run parallel tests in the main " +
             "git tree. This will save a little time if you don't actually need " +
             "the source code to run your tests, e.g. if you're just sending test " +
-            "requests to a remote CI server. The GIT_DISSECT_TEST_REVISION " +
+            "requests to a remote CI server. The GIT_brisect_TEST_REVISION " +
             "environment variable will tell your command what commit is under " +
             "test."))
     parser.add_argument("-o", "--out-dir", type=pathlib.Path, help=(
@@ -479,7 +479,7 @@ def parse_args(argv: list[str]):
         'cancelled, an empty file named CANCELED (with one "L"!) will be next to them. There is' +
         'also a subdirectory called output/ which is a place for the test command' +
         'to dump extra artifacts; the path of this directory is passed as the' +
-        'GIT_DISSECT_OUTPUT_DIR environment veriable. If this arg is not set ' +
+        'GIT_brisect_OUTPUT_DIR environment veriable. If this arg is not set ' +
         'an output directory will be created in --out-dir-in.'
     ))
     parser.add_argument("-i", "--out-dir-in", type=pathlib.Path, default=tempfile.gettempdir(), help=(
@@ -525,7 +525,7 @@ def main(argv: list[str], output: TextIO, now: datetime.datetime) -> int:
     if False:  # args.test_every_commit:
         raise NotImplementedError("soz")
     else:
-        result = dissect(args.range, args.cmd,
+        result = brisect(args.range, args.cmd,
                          num_threads=args.num_threads,
                          use_worktrees=not args.no_worktrees,
                          out_dir=out_dir)
