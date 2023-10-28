@@ -102,15 +102,7 @@ class RevRange:
         if len(include) == 0:
             raise BadRangeError(f"No commits included in range {s}")
         if len(include) > 1:
-            # I don't realy know why this restriction exists; it would
-            # complicate the implementation in some nontrivial ways but I
-            # feel it could be done. Would be interesting to find out why
-            # the normal git-bisect doesn't allow it.
             raise BadRangeError(f"Can't brisect with multiple tip revs: {' '.join(include)}")
-        # Trying to debug rare test flake where we somehow brisect the wrong
-        # range. The brisection works fine but the range printed at the
-        # beginning of do_brisect is wrong.
-        logger.debug(f"RevRange.from_string({s}): include={include} exclude={exclude}")
         return cls(exclude=exclude, include=include[0])
 
     def __repr__(self):
