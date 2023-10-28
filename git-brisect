@@ -93,6 +93,8 @@ class RevRange:
                 dd_parts = part.split("..")
                 if len(dd_parts) != 2:
                     raise BadRangeError("%s contains more than one '..'" % s)
+                if dd_parts[0] == "" or dd_parts[1] == "":
+                    raise BadRangeError("Bad '..' syntax")
                 exclude.append(dd_parts[0])
                 include.append(dd_parts[1])
             elif part.startswith("^"):

@@ -125,7 +125,10 @@ class RevRangeTest(GitbrisectTestWithRepo):
             # We could actually handle this in the case that foo is an ancestor
             # of bar or vice versa. But we don't.
             "bar...foo",
-            ""
+            "",
+            "bar..",
+            "..foo",
+            "..foo^",
         ]
         for in_str in cases:
             with self.subTest(in_str=in_str):
