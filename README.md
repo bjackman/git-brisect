@@ -11,6 +11,12 @@ To use it, run `git brisect $bad_commit..$good_commit -- <test command>`.
 I expect it to work on any Unix, and Windows _might_ work (let me know if you
 try it!).
 
+This finds you a commit that is "bad", and whose parent commits are all "good".
+You don't need to have a linear history, this handles merge commits just fine.
+(`git bisect` does this too). You also don't have to specify a singular "good"
+commit, you can specify `bad ^good1 ^good2` (you can only have one "bad" commit
+though).
+
 ## Writing the test command
 
 The test command should exit with code 0 if the commit is "good", and a non-zero
