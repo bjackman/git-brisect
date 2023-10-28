@@ -476,11 +476,11 @@ def parse_args(argv: list[str]):
             "environment variable will tell your command what commit is under " +
             "test."))
     parser.add_argument("-o", "--out-dir", type=pathlib.Path, help=(
-        'Extant directory to store output in. Each commit gets a subdirectory, in there' +
-        'will be a returncode.txt, stderr.txt and stdout.txt. If the test was' +
-        'cancelled, an empty file named CANCELED (with one "L"!) will be next to them. There is' +
-        'also a subdirectory called output/ which is a place for the test command' +
-        'to dump extra artifacts; the path of this directory is passed as the' +
+        'Extant directory to store output in. Each commit gets a subdirectory, in there ' +
+        'will be a returncode.txt, stderr.txt and stdout.txt. If the test was ' +
+        'cancelled, an empty file named CANCELED (with one "L"!) will be next to them. There is ' +
+        'also a subdirectory called output/ which is a place for the test command ' +
+        'to dump extra artifacts; the path of this directory is passed as the ' +
         'GIT_brisect_OUTPUT_DIR environment veriable. If this arg is not set ' +
         'an output directory will be created in --out-dir-in.'
     ))
