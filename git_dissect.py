@@ -492,7 +492,7 @@ def parse_args(argv: list[str]):
 
     return parser.parse_args(argv)
 
-def make_out_dir(args: list[str], now: datetime.datetime) -> pathlib.Path:
+def make_out_dir(args: argparse.Namespace, now: datetime.datetime) -> pathlib.Path:
     if args.out_dir:
         out_dir = args.out_dir
         try:
