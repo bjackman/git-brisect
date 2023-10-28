@@ -3,8 +3,8 @@
 `git-brisect` does the same thing as `git bisect run`, but supports testing
 multiple commits in parallel.
 
-To install it, put `git_brisect.py` on your `$PATH`, make it executable, and
-rename it to `git-brisect`. Now `git` has a `brisect` subcommand.
+To install it, just download `git-brisect` and put it on your `$PATH`.
+Now `git` has a `brisect` subcommand.
 
 To use it, run `git brisect $bad_commit..$good_commit -- <test command>`.
 
