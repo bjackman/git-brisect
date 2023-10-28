@@ -191,7 +191,7 @@ class WorkerPool:
     # can't be bothered to learn that.
 
     def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path],
-                 checkout_test_rev: bool, out_dir: pathlib.Path):
+                 checkout_test_rev: bool, out_dir: pathlib.Path, cancel: threading.Event):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._in_q = []  # Revs are always described by commit hash in this queue.
@@ -199,6 +199,7 @@ class WorkerPool:
         self._threads = []
         self._subprocesses = {}
         self._done = False
+        self._cancel_event = cancel
         self._test_cmd = test_cmd
         self._out_dir = out_dir
         self._checkout_test_rev = checkout_test_rev
@@ -293,8 +294,10 @@ class WorkerPool:
 
     def wait(self):
         with self._cond:
-            while len(self._out_q) == 0:
+            while len(self._out_q) == 0 and not self._cancel_event.is_set():
                 self._cond.wait()
+            if self._cancel_event.is_set():
+                return None, None
             ret = self._out_q[0]
             self._out_q = self._out_q[1:]
             return ret
@@ -348,6 +351,8 @@ def do_brisect(args, pool, full_range):
             untested_ranges = sorted(untested_ranges, key=lambda r: len(r.commits()), reverse=True)
 
         result_commit, returncode = pool.wait()
+        if result_commit is None:
+            return None # Interrupted.
         if result_commit not in full_range.commits():
             continue  # We cancelled this one - result is not interesting or meaningful.
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
@@ -369,7 +374,8 @@ def do_brisect(args, pool, full_range):
 
     return rev_parse(full_range.include)
 
-def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True):
+def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True,
+            cancel: threading.Event = threading.Event()):
     tmpdir = None
     if use_worktrees:
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -383,10 +389,12 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         logger.info("...Done setting up worktrees.")
+
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
                           checkout_test_rev=bool(worktrees),
-                          out_dir=out_dir)
+                          out_dir=out_dir, cancel=cancel)
+
         return do_brisect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
@@ -429,7 +437,7 @@ def test_every_commit(rev_range: str, args: Iterable[str],
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [os.getcwd() for _ in range(num_threads)],
                           checkout_test_rev=bool(worktrees),
-                          out_dir=out_dir)
+                          out_dir=out_dir, cancel=threading.Event())
         return do_test_every_commit(pool, commits)
     finally:
         if pool:
@@ -509,7 +517,8 @@ def make_out_dir(args: argparse.Namespace, now: datetime.datetime) -> pathlib.Pa
 
     return out_dir
 
-def main(argv: list[str], output: TextIO, now: datetime.datetime) -> int:
+def main(argv: list[str], output: TextIO, now: datetime.datetime,
+         cancel: threading.Event = threading.Event()) -> int:
     args = parse_args(argv[1:])
     out_dir = make_out_dir(args, now)
     output.write(f'Writing output to {out_dir}\n')
@@ -520,12 +529,22 @@ def main(argv: list[str], output: TextIO, now: datetime.datetime) -> int:
         result = brisect(args.range, args.cmd,
                          num_threads=args.num_threads,
                          use_worktrees=not args.no_worktrees,
-                         out_dir=out_dir)
-        output.write(f'First bad commit is {result} ("{commit_title(result)}")\n')
+                         out_dir=out_dir, cancel=cancel)
+        if result is not None:
+            output.write(f'First bad commit is {result} ("{commit_title(result)}")\n')
     return 0
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
 
-    sys.exit(main(sys.argv, sys.stdout, datetime.datetime.now()))
+    cancel = threading.Event()
+    old_sigint_handler = signal.getsignal(signal.SIGINT)
+    def sigint_handler(n, f):
+        logger.warning("Received SIGINT, trying to shut down cleanly.")
+        logger.warning("    SIGINT again to shut down more aggressively.")
+        cancel.set()
+        signal.signal(signal.SIGINT, old_sigint_handler)
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    sys.exit(main(sys.argv, sys.stdout, datetime.datetime.now(), cancel))
