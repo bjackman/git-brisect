@@ -93,7 +93,6 @@ background.
 
 ## Shortcomings & Missing Features
 
- - Want better output formatting.
  - Want an equivalent to `git bisect skip`.
  - Want the ability to re-use existing worktrees instead of creating and tearing down
    special ones.
@@ -108,10 +107,10 @@ background.
    backtraces. Also the multithreading has no way to propagate unexpected errors
    back to the main thread so it's probably possible to make this thing hang.
  - Want a way to spin up a pipe that can be passed in to `make`'s
-  `--jobserver-fd` thing.
- - I think the test coverage of the actual algorithm is pretty good. But not for
-   the end-to-end logic, like it's probably possible to confuse this thing with
-   invalid inputs. Also the test code is quite a mess, but whatever.
+   `--jobserver-fd` thing.  - I think the test coverage of the actual algorithm
+   is pretty good (I used [Hypothesis](https://hypothesis.readthedocs.io). But
+   not for the end-to-end logic, like it's probably possible to confuse this
+   thing with invalid inputs. Also the test code is quite a mess, but whatever.
  - There's some dead code in there for an incomplete `--test-every-commit`
    feature, I think I will probably still want to add that at some point.
 
