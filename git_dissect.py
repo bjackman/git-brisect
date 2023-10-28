@@ -1,14 +1,6 @@
 #!/usr/bin/python3
 from __future__ import annotations
 
-"""
-Usage:
-git bisect start
-git bisect bad $BAD
-git bisect good $GOOD
-git-dissect [--[no-]worktrees] $*
-"""
-
 import argparse
 import dataclasses
 import datetime
