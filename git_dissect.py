@@ -206,7 +206,8 @@ class WorkerPool:
     # OK, I think Python's new async stuff would be the way to go here. But... I
     # can't be bothered to learn that.
 
-    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path], out_dir: pathlib.Path):
+    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path],
+                 checkout_test_rev: bool, out_dir: pathlib.Path):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._in_q = []  # Revs are always described by commit hash in this queue.
@@ -216,6 +217,7 @@ class WorkerPool:
         self._done = False
         self._test_cmd = test_cmd
         self._out_dir = out_dir
+        self._checkout_test_rev = checkout_test_rev
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -280,7 +282,9 @@ class WorkerPool:
 
                 logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
 
-                run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
+                if self._checkout_test_rev:
+                    run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
+                env["GIT_DISSECT_TEST_REVISION"] = commit_hash
                 try:
                     p = subprocess.Popen(
                         self._test_cmd, cwd=workdir,
@@ -397,6 +401,7 @@ def dissect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
         logger.info("...Done setting up worktrees.")
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
+                          checkout_test_rev=bool(worktrees),
                           out_dir=out_dir)
         return do_dissect(args, pool, RevRange.from_string(rev_range))
     finally:
@@ -439,6 +444,7 @@ def test_every_commit(rev_range: str, args: Iterable[str],
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [os.getcwd() for _ in range(num_threads)],
+                          checkout_test_rev=bool(worktrees),
                           out_dir=out_dir)
         return do_test_every_commit(pool, commits)
     finally:
@@ -462,11 +468,19 @@ def parse_args(argv: list[str]):
         help=(
             "Max parallelism. " +
             " Note that increasing this incurs a startup cost if using worktrees."))
+    # I have no idea why I thought this option was worth it. But it's
+    # implemented and tested now so I'll leave it in. Maybe it will come in
+    # handy?  I won't document it in the README it's just confusing.
     parser.add_argument(
         "--no-worktrees", action="store_true",
         help=(
             "By default, each thread runs the test in its own worktree. " +
-            "Set this to disable that, and just run parallel tests in the main git tree"))
+            "Set this to disable that, and just run parallel tests in the main " +
+            "git tree. This will save a little time if you don't actually need " +
+            "the source code to run your tests, e.g. if you're just sending test " +
+            "requests to a remote CI server. The GIT_DISSECT_TEST_REVISION " +
+            "environment variable will tell your command what commit is under " +
+            "test."))
     parser.add_argument("-o", "--out-dir", type=pathlib.Path, help=(
         'Extant directory to store output in. Each commit gets a subdirectory, in there' +
         'will be a returncode.txt, stderr.txt and stdout.txt. If the test was' +

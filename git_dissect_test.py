@@ -637,12 +637,14 @@ class TestEndToEnd(unittest.TestCase):
 
     def test_bisect_smoke(self):
         # "Bug" is in commit 2.
-        cmd = ["bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
+        c = "! git merge-base --is-ancestor 2 {}"
+        cmd = ["bash", "-c", c.format("HEAD")]
+        cmd_no_head = ["bash", "-c", c.format("$GIT_DISSECT_TEST_REVISION")]
 
         args_cases = [
             ["git-dissect", "0..4", "--"] + cmd,
             ["git-dissect", "4 ^0", "--"] + cmd,
-            ["git-dissect", "--no-worktrees", "0..4", "--"] + cmd,
+            ["git-dissect", "--no-worktrees", "0..4", "--"] + cmd_no_head,
             ["git-dissect", "--num-threads", "4", "0..4", "--"] + cmd,
             ["git-dissect", "-n", "4", "0..4", "--"] + cmd,
             ["git-dissect", "-n4", "0..4", "--"] + cmd,

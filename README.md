@@ -37,13 +37,6 @@ commit (but remember, the command isn't run via the shell). You don't need to
 create the directory, it already exists. Only files that you create go in here;
 you don't need to worry about filename collisions.
 
-TODO: Wait, how do we communicate the commit "being tested"?
-If you don't actually need to check out the code to test a
-commit (e.g. if you're just scheduling tests on a remote CI server), you can set
-`--no-worktreees` to save a little time; in that case instead of a worktree with
-the commit checked out your test command will just get run directly from the
-main repository.
-
 ## The result directory
 
 `git-dissect` will collect the command's outputs and store it in a directory.
