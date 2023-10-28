@@ -213,7 +213,7 @@ class WorkerPool:
     def enqueue(self, rev):
         with self._cond:
             self._in_q.append(rev_parse(rev))
-            logger.info(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
+            logger.debug(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
             self._cond.notify_all()
 
     def num_pending(self):
@@ -243,7 +243,7 @@ class WorkerPool:
         try:
             self.__work(workdir)
         except Exception:
-            logger.info(traceback.format_exc())
+            logger.error(traceback.format_exc())
 
     def __work(self, workdir: pathlib.Path):
         while True:
@@ -275,7 +275,7 @@ class WorkerPool:
                         self._test_cmd, cwd=workdir,
                         stderr=stderr, stdout=stdout, env=env)
                 except (PermissionError, FileNotFoundError) as e:
-                    logging.info(f"Error running at {commit_hash} ({e}), returning code 1")
+                    logger.info(f"Error running at {commit_hash} ({e}), returning code 1")
                     self._out_q.append((commit_hash, 1))
                     self._cond.notify_all()
                     continue
@@ -312,7 +312,6 @@ class WorkerPool:
             t.join()
 
 def do_brisect(args, pool, full_range):
-    logger.info(f"brisecting range {full_range}")
     # Note: a "culprit" is a commit that is bad and all of whose ancestors are
     # good. There may actually be more than one such commit, but sometimes it's
     # clearer to talk about "the" culprit anyway, that just means the one we're
@@ -356,14 +355,14 @@ def do_brisect(args, pool, full_range):
         if result_commit not in full_range.commits():
             continue  # We cancelled this one - result is not interesting or meaningful.
         logger.info(f"Got result {returncode} for {describe(result_commit)}")
-        logger.info(f"    Considering range {full_range}")
+        logger.debug(f"    Considering range {full_range}")
 
         if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
             (cancel, full_range) = full_range.split(result_commit)
         else:                # This commit or one of its ancestors is a culprit.
             (full_range, cancel) = full_range.split(result_commit)
 
-        logger.info(f"    Canceling {cancel}, remaining: {full_range}")
+        logger.debug(f"    Canceling {cancel}, remaining: {full_range}")
         pool.cancel(cancel)
 
         # Drop known-* commits from future testing. subranges are either subsets
@@ -388,7 +387,7 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
         logger.info("Setting up worktrees...")
         for w in worktrees:
             run_cmd(["git", "worktree", "add", w, "HEAD"])
-        logger.info("...Done setting up worktrees.")
+        logger.info("Done setting up worktrees.")
 
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
@@ -404,7 +403,7 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
         logger.info("Tearing down worktrees...")
         for w in worktrees:
             run_cmd(["git", "worktree", "remove", "--force", w])
-        logger.info("... Done tearing down worktrees.")
+        logger.info("Done tearing down worktrees.")
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
@@ -460,6 +459,7 @@ def parse_args(argv: list[str]):
         help=(
             "Max parallelism. " +
             " Note that increasing this incurs a startup cost if using worktrees."))
+    parser.add_argument("-v", "--verbose", action="store_true", help="promulgate progress profusely")
     # I have no idea why I thought this option was worth it. But it's
     # implemented and tested now so I'll leave it in. Maybe it will come in
     # handy?  I won't document it in the README it's just confusing.
@@ -520,6 +520,13 @@ def make_out_dir(args: argparse.Namespace, now: datetime.datetime) -> pathlib.Pa
 def main(argv: list[str], output: TextIO, now: datetime.datetime,
          cancel: threading.Event = threading.Event()) -> int:
     args = parse_args(argv[1:])
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG,
+                            format="%(asctime)s %(levelname)-6s %(message)s")
+    else:
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     out_dir = make_out_dir(args, now)
     output.write(f'Writing output to {out_dir}\n')
 
@@ -535,9 +542,6 @@ def main(argv: list[str], output: TextIO, now: datetime.datetime,
     return 0
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG,
-                        format="%(asctime)s %(levelname)-6s %(message)s")
-
     cancel = threading.Event()
     old_sigint_handler = signal.getsignal(signal.SIGINT)
     def sigint_handler(n, f):
