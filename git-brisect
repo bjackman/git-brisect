@@ -380,7 +380,7 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
     tmpdir = None
     if use_worktrees:
         tmpdir = pathlib.Path(tempfile.mkdtemp())
-        worktrees = [tmpdir / f"worktree-{i}" for i in range(num_threads)]
+        worktrees = [tmpdir / f"brisect-worktree-{i}" for i in range(num_threads)]
     else:
         worktrees = []
 
