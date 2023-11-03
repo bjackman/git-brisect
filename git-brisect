@@ -193,7 +193,7 @@ class WorkerPool:
     # can't be bothered to learn that.
 
     def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path],
-                 checkout_test_rev: bool, out_dir: pathlib.Path, cancel: threading.Event):
+                 worktree_mode: bool, out_dir: pathlib.Path, cancel: threading.Event):
         # Used to synchronize enqueuement with the worker threads.
         self._cond = threading.Condition()
         self._in_q = []  # Revs are always described by commit hash in this queue.
@@ -204,7 +204,7 @@ class WorkerPool:
         self._cancel_event = cancel
         self._test_cmd = test_cmd
         self._out_dir = out_dir
-        self._checkout_test_rev = checkout_test_rev
+        self._worktree_mode = worktree_mode
 
         for workdir in workdirs:
             t = threading.Thread(target=self._work, args=(workdir,))
@@ -269,7 +269,7 @@ class WorkerPool:
 
                 logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
 
-                if self._checkout_test_rev:
+                if self._worktree_mode:
                     run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
                 env["GIT_BRISECT_TEST_REVISION"] = commit_hash
                 try:
@@ -386,14 +386,9 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
 
     pool = None
     try:
-        logger.info("Setting up worktrees...")
-        for w in worktrees:
-            run_cmd(["git", "worktree", "add", w, "HEAD"])
-        logger.info("Done setting up worktrees.")
-
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
-                          checkout_test_rev=bool(worktrees),
+                          worktree_mode=bool(worktrees),
                           out_dir=out_dir, cancel=cancel)
 
         return do_brisect(args, pool, RevRange.from_string(rev_range))
@@ -437,7 +432,7 @@ def test_every_commit(rev_range: str, args: Iterable[str],
             run_cmd(["git", "worktree", "add", w, "HEAD"])
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [os.getcwd() for _ in range(num_threads)],
-                          checkout_test_rev=bool(worktrees),
+                          worktree_mode=bool(worktrees),
                           out_dir=out_dir, cancel=threading.Event())
         return do_test_every_commit(pool, commits)
     finally:
