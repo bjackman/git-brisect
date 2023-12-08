@@ -99,6 +99,11 @@ background.
 
 ## Shortcomings & Missing Features
 
+ - Unconditionally sets up worktrees for every thread, and this process cannot
+   be cleanly interrupted. This is annoying if you are bisecting a very large
+   repository! To fix this without making a horrible horrible mess (while
+   allowing the worktree setup to be cleanly aborted) I think the code needs to
+   be ported to use `asyncio`.
  - Want an equivalent to `git bisect skip`.
  - Want the ability to re-use existing worktrees instead of creating and tearing down
    special ones.
@@ -119,6 +124,13 @@ background.
    thing with invalid inputs. Also the test code is quite a mess, but whatever.
  - There's some dead code in there for an incomplete `--test-every-commit`
    feature, I think I will probably still want to add that at some point.
+
+More generally, it would be cool to generalise this algorithm to work on noisy
+results so that it can be used on flaky tests and even benchmarks. Perhaps
+that's better as a separate project though. I believe that the Chrome OS folks
+have something that does this
+[here](https://chromium.googlesource.com/chromiumos/platform/bisect-kit/), would
+be cool to investigate.
 
 ## Running the tests
 
