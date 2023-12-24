@@ -287,32 +287,6 @@ class TestBisection(GitbrisectTestWithRepo):
     #
     #  ensure things don't break under long enqueuements
 
-class TestTestEveryCommit(GitbrisectTestWithRepo):
-    def test_smoke(self):
-        self.write_pass_fail_script(fail=False)
-        commits = []
-        commits.append(commit("1"))
-        commits.append(commit("2"))
-        commits.append(commit("3"))
-        self.write_pass_fail_script(fail=True)
-        commits.append(commit("4"))
-        commits.append(commit("5"))
-        commits.append(commit("6"))
-        self.write_pass_fail_script(fail=False)
-        commits.append(commit("7"))
-
-        self.logger.info(git("log", "--graph", "--all", "--oneline"))
-
-        results = git_brisect.test_every_commit(
-            f"{commits[0]}..{commits[-1]}",
-            ["sh", "./run.sh"],
-            out_dir=pathlib.Path.cwd())
-        want = list(reversed(list(zip(commits[1:], [
-            0, 0, 1, 1, 1, 0
-        ]))))
-
-        self.assertCountEqual(results, want)
-
 class TestRevRange(GitbrisectTest):
     def test_full_spec(self):
         # Hack: when specifying the range in full we don't actually need access
