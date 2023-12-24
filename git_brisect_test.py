@@ -1,10 +1,12 @@
 #!/usr/bin/python3
 from __future__ import annotations
 
+import asyncio
 import collections
 import dataclasses
 import datetime
 import io
+import inspect
 import logging
 import unittest
 import os
@@ -136,8 +138,8 @@ class RevRangeTest(GitbrisectTestWithRepo):
                     got = git_brisect.RevRange.from_string(in_str)
                     self.logger.info(f"Got: {got}")
 
-class TestBisection(GitbrisectTestWithRepo):
-    def _run_worktree_test(self, use_worktrees: bool):
+class TestBisection(GitbrisectTestWithRepo, unittest.IsolatedAsyncioTestCase):
+    async def _run_worktree_test(self, use_worktrees: bool):
         """Run a test that should result in multiple worktrees being used.
 
         (Unless use_worktrees is false). The test script records what CWD it was
@@ -167,10 +169,10 @@ class TestBisection(GitbrisectTestWithRepo):
 
         self.logger.info(git("log", "--graph", "--all", "--oneline"))
 
-        git_brisect.brisect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
-                            use_worktrees=use_worktrees,
-                            out_dir=pathlib.Path.cwd(),
-                            num_threads=4)
+        await git_brisect.brisect(f"{init}..{end}", ["sh", "./log_cwd.sh", "./run.sh"],
+                                  use_worktrees=use_worktrees,
+                                  out_dir=pathlib.Path.cwd(),
+                                  num_threads=4)
         runs = self.script_runs()
 
         lines = self.read_stripped_lines("cwds.txt")
@@ -187,22 +189,22 @@ class TestBisection(GitbrisectTestWithRepo):
             ret.append((cwd, dirty_status == "0"))
         return ret
 
-    def test_worktree_mode_no_cleanup(self):
-        results = self._run_worktree_test(use_worktrees=True)
+    async def test_worktree_mode_no_cleanup(self):
+        results = await self._run_worktree_test(use_worktrees=True)
         # If this flakes, it might be that by chance no worktree got reused,
         # which isn't technically a bug. Try to find a way to force them to get
         # reused.
         self.assertTrue(any(dirty for (cwd, dirty) in results))
 
-    def test_non_worktree_mode(self):
-        results = self._run_worktree_test(use_worktrees=False)
+    async def test_non_worktree_mode(self):
+        results = await self._run_worktree_test(use_worktrees=False)
 
         # If nobody saw a dirty tree, seems like there was more parallelism than
         # expected, or we were racily cleaning up the tree.
         self.assertTrue(any(dirty for (cwd, dirty) in results))
         self.assertTrue(all(cwd == os.getcwd() for (cwd, dirty) in results))
 
-    def _test_thread_limit(self, num_threads):
+    async def _test_thread_limit(self, num_threads):
         # At each commit will be a script that starts, touches a unique file
         # path, then hangs until a different unique filepath appers, then exits.
         commits = []
@@ -221,15 +223,9 @@ class TestBisection(GitbrisectTestWithRepo):
         self.logger.info("\n" + git("log", "--graph", "--all", "--oneline"))
 
         # Run the brisection in the background
-        brisect_result = None
-        def run_brisect():
-            nonlocal brisect_result
-            brisect_result = git_brisect.brisect(
-                f"{commits[0]}..{commits[-1]}", args=["bash", "./run.sh"], num_threads=num_threads,
-                out_dir=pathlib.Path.cwd())
-
-        thread = threading.Thread(target=run_brisect)
-        thread.start()
+        brisect_task = asyncio.create_task(git_brisect.brisect(
+            f"{commits[0]}..{commits[-1]}", args=["bash", "./run.sh"], num_threads=num_threads,
+            out_dir=pathlib.Path.cwd()))
 
         # Gets the indexes of the commits whose test scripts are currently
         # started/done
@@ -249,29 +245,25 @@ class TestBisection(GitbrisectTestWithRepo):
             # No choice really but to just sleep for some random time, we can
             # detect when the expected tests get started, but we don't know when
             # we can trust that it doesn't also start any unexpected tests.
-            time.sleep(0.5)
-
-            if not thread.is_alive():
-                break
+            await asyncio.sleep(0.5)
 
             self.assertLessEqual(len(running_tests()), num_threads,
                                  "after stopping %d threads" % i)
+
+            if brisect_task.done():
+                break
 
             # Let one of the threads exit
             to_terminate = next(iter(running_tests()))
             open("stop-" + str(to_terminate), "w").close()
 
-        self.logger.info("joining")
-        thread.join()
+        self.assertIsNotNone(await brisect_task)
 
-        # If this fails then brisect() must have crashed.
-        self.assertIsNotNone(brisect_result)
+    async def test_no_parallelism(self):
+        await self._test_thread_limit(1)
 
-    def test_no_parallelism(self):
-        self._test_thread_limit(1)
-
-    def test_limited_threads(self):
-        self._test_thread_limit(4)
+    async def test_limited_threads(self):
+        await self._test_thread_limit(4)
 
     # TODO:
     #
@@ -525,6 +517,16 @@ class TestWithHypothesis(GitbrisectTest):
         # If subsets_size > len(superset) then they must not be disjoint.
         self.assertEqual(subsets_size, len(superset))
 
+    # Hypothesis doesn't know how to run async methods, this defines an Executor
+    # (Hypothesis concept) to work around that issue.
+    def execute_example(self, test_func):
+        result = test_func()
+        if inspect.isawaitable(result):
+            result = asyncio.run(result)
+        if callable(result):
+            result = result()
+        return result
+
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.example((Dag(num_nodes=4, edges=frozenset({(0, 1), (0, 2), (2, 3), (1, 3)})),
                          (2, 3)))
@@ -560,7 +562,7 @@ class TestWithHypothesis(GitbrisectTest):
         dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (2, 3), (0, 3)})),
         leaf=3, culprit=3))
     @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
-    def test_bisect(self, case: BisectCase):
+    async def test_bisect(self, case: BisectCase):
         self.logger.info(f"Running {case}")
         self.setup_repo(case.dag)
         # Bisect the range consisting of all the ancestors of the leaf node.
@@ -580,8 +582,8 @@ class TestWithHypothesis(GitbrisectTest):
         # commits to be their own ancestor); if it is then HEAD is "broken".
         cmd = (f"git describe --tags HEAD >> {os.getcwd()}/tested_commits.txt; " +
                f"! git merge-base --is-ancestor {case.culprit} HEAD")
-        result = git_brisect.brisect(rev_range=range_spec, args=["bash", "-c", cmd],
-                                     out_dir=pathlib.Path.cwd())
+        result = await git_brisect.brisect(rev_range=range_spec, args=["bash", "-c", cmd],
+                                           out_dir=pathlib.Path.cwd())
         self.assertEqual(self.describe(result), str(case.culprit))
 
         with open(tested_commits_path) as f:
@@ -589,7 +591,7 @@ class TestWithHypothesis(GitbrisectTest):
         tested_multiple = [v for v, c in collections.Counter(tested_commits).items() if c > 1]
         self.assertFalse(tested_multiple)  # Should be empty (nothing tested twice)
 
-class TestEndToEnd(unittest.TestCase):
+class TestEndToEnd(unittest.IsolatedAsyncioTestCase):
     logger: logging.Logger
 
     now = datetime.datetime(2023, 10, 21, 17, 30, 4, 605908)
@@ -630,17 +632,17 @@ class TestEndToEnd(unittest.TestCase):
             with self.subTest(args=args):
                 self.logger.info(args)
                 stdout = io.StringIO()
-                git_brisect.main(args, stdout, self.now)
+                asyncio.run(git_brisect.main(args, stdout, self.now))
                 commit_hash = git_brisect.rev_parse("2")
                 line = self.grep(stdout.getvalue(), '^First bad commit is.*')
                 self.assertEqual(line, f'First bad commit is {commit_hash} ("2")')
 
-    def test_out_dir_creation(self):
-        def check_out_dir(args):
+    async def test_out_dir_creation(self):
+        async def check_out_dir(args):
             stdout = io.StringIO()
             full_args = ["git-brisect"] + args + [
                 "0..4", "--", "bash", "-c", "! git merge-base --is-ancestor 2 HEAD"]
-            git_brisect.main(full_args, stdout, self.now)
+            await git_brisect.main(full_args, stdout, self.now)
             line = self.grep(stdout.getvalue(), "^Writing output to.*")
             out_dir = line.split(" ")[-1]
             self.assertTrue(os.path.isdir(out_dir))
@@ -648,21 +650,21 @@ class TestEndToEnd(unittest.TestCase):
             return out_dir
 
         # Default: just check existence.
-        check_out_dir([])
+        await check_out_dir([])
 
-        out_dir = check_out_dir(["--out-dir", f"{os.getcwd()}/foo-bar"])
+        out_dir = await check_out_dir(["--out-dir", f"{os.getcwd()}/foo-bar"])
         self.assertEqual(out_dir, f"{os.getcwd()}/foo-bar")
 
-        out_dir_1 = check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
+        out_dir_1 = await check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
         self.assertTrue(out_dir_1.startswith(f"{os.getcwd()}/foo-bar/"))
 
         # Second time, since the timestamp is the same, the output directory
         # should get a unique suffix.
-        out_dir_2 = check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
+        out_dir_2 = await check_out_dir(["--out-dir-in", f"{os.getcwd()}/foo-bar"])
         self.assertTrue(out_dir_2.startswith(out_dir_1))
         self.assertNotEqual(out_dir_2, out_dir_1)
 
-    def test_out_dir_contents(self):
+    async def test_out_dir_contents(self):
         out_dir = pathlib.Path.cwd() / "out_dir"
         out_dir.mkdir()
 
@@ -691,27 +693,22 @@ class TestEndToEnd(unittest.TestCase):
         """]
 
         # Run the brisection in the background
-        brisect_result = None
-        def run_brisect():
-            nonlocal brisect_result
-            args = ["git-brisect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
-            brisect_result = git_brisect.main(args, io.StringIO(), self.now)
-        thread = threading.Thread(target=run_brisect)
-        thread.start()
-        self.addCleanup(thread.join)
+        args = ["git-brisect", "--out-dir", str(out_dir), "--num-thread", "4", "0..4", "--"] + cmd
+        brisect_task = asyncio.create_task(git_brisect.main(args, io.StringIO(), self.now))
+
 
         # Wait for test 3's output to exist so we know that test got started
         # before the culprit was detected, so we can assert its cancelation is
         # reported.
         test_3_output = out_dir / git_brisect.rev_parse("3") / "output" / "t.txt"
-        while thread.is_alive() and not test_3_output.exists():
-            time.sleep(0.1)
+        while not brisect_task.done() and not test_3_output.exists():
+            await asyncio.sleep(0.1)
         self.assertTrue(test_3_output.exists())
 
         # Unblock test 2; now the whole bisection should complete.
         with open("unhang", "w") as f:
             pass
-        thread.join()
+        await brisect_task
 
         # Note we can't really assert on comit 0's output. But 1 and 2 must have
         # been tested in order to detect the culprit, and we have carefully
@@ -735,5 +732,6 @@ class TestEndToEnd(unittest.TestCase):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s %(levelname)-6s %(message)s")
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
 
     unittest.main()

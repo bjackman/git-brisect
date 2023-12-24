@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import argparse
-import dataclasses
+import asyncio
+import collections
 import datetime
 import logging
 import multiprocessing
@@ -12,13 +13,11 @@ import signal
 import subprocess
 import tempfile
 import threading
-import traceback
 import typing
-import queue
 import shutil
 import sys
 
-from typing import Optional, TextIO
+from typing import Optional, TextIO, List
 from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
@@ -192,39 +191,69 @@ class WorkerPool:
     # OK, I think Python's new async stuff would be the way to go here. But... I
     # can't be bothered to learn that.
 
-    def __init__(self, test_cmd: Iterable[str], workdirs: Iterable[pathlib.Path],
-                 checkout_test_rev: bool, out_dir: pathlib.Path, cancel: threading.Event):
+
+    _subprocesses: dict[str, asyncio.subprocess.Process]
+    _communicate_tasks: list[asyncio.tasks.Task[tuple[str, int]]]
+
+    def __init__(self, test_cmd: list[str], workdirs: Iterable[pathlib.Path],
+                 worktree_mode: bool, out_dir: pathlib.Path, cancel: threading.Event):
         # Used to synchronize enqueuement with the worker threads.
-        self._cond = threading.Condition()
-        self._in_q = []  # Revs are always described by commit hash in this queue.
-        self._out_q = []
-        self._threads = []
         self._subprocesses = {}
+        self._communicate_tasks = []
         self._done = False
         self._cancel_event = cancel
         self._test_cmd = test_cmd
         self._out_dir = out_dir
-        self._checkout_test_rev = checkout_test_rev
+        self._worktree_mode = worktree_mode
+        self._free_workdirs = list(workdirs)
+        self.num_threads = len(self._free_workdirs)
 
-        for workdir in workdirs:
-            t = threading.Thread(target=self._work, args=(workdir,))
-            t.start()
-            self._threads.append(t)
-        self.num_threads = len(self._threads)
+    async def enqueue(self, rev):
+        # TODO: refactor to avoid this mess
+        if not self._free_workdirs:
+            raise RuntimeError("bug: No free workdirs")
+        workdir = self._free_workdirs[0]
+        self._free_workdirs = self._free_workdirs[1:]
 
-    def enqueue(self, rev):
-        with self._cond:
-            self._in_q.append(rev_parse(rev))
-            logger.debug(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
-            self._cond.notify_all()
+        commit_hash = rev_parse(rev)  # TODO: Remove this, ensure input is hash.
+        if commit_hash in self._subprocesses:
+            raise RuntimeError(f"Duplicate enqueue of {rev}")
+
+        commit_out_dir = self._out_dir / commit_hash
+        commit_out_dir.mkdir()
+        stderr = (commit_out_dir / "stderr.txt").open("w")
+        stdout = (commit_out_dir / "stdout.txt").open("w")
+        env = dict(os.environ)
+        extra_output_dir = commit_out_dir / "output"
+        extra_output_dir.mkdir()
+        env["GIT_BRISECT_OUTPUT_DIR"] = str(extra_output_dir)
+
+        logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
+
+        if self._worktree_mode:
+            run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
+        env["GIT_BRISECT_TEST_REVISION"] = commit_hash
+        p = await asyncio.create_subprocess_exec(
+            self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
+            stderr=stderr, stdout=stdout, env=env)
+        # TODO:
+        # except (PermissionError, FileNotFoundError) as e:
+        #     logger.info(f"Error running at {commit_hash} ({e}), returning code 1")
+        #     self._out_q.append((commit_hash, 1))
+        #     self._cond.notify_all()
+        #     continue
+
+        self._subprocesses[commit_hash] = p
+        async def communicate():
+            await p.wait()
+            self._free_workdirs.append(workdir)
+            stdout.close()
+            stderr.close()
+            return commit_hash, p.returncode
+        self._communicate_tasks.append(asyncio.create_task(communicate()))
 
     def num_pending(self):
-        with self._cond:
-            return len(self._in_q) + len(self._subprocesses)
-
-    def out_q_length(self):
-        with self._cond:
-            return len(self._out_q)
+        return len(self._subprocesses)
 
     def _cancel(self, commit_hash: str):
         with (self._out_dir / commit_hash / "CANCELED").open("w"):
@@ -233,87 +262,31 @@ class WorkerPool:
         self._subprocesses[commit_hash].send_signal(signal.SIGINT)
 
     def cancel(self, range: RevRange):
-        with self._cond:
-            self._in_q = list(r for r in self._in_q if r not in range.commits())
-            for commit_hash in self._subprocesses:
-                if commit_hash in range.commits():
-                    self._cancel(commit_hash)
-
-    def _work(self, workdir: pathlib.Path):
-        # Desperate workaround to try and get Python to show me the fucking
-        # error I dunno.
-        try:
-            self.__work(workdir)
-        except Exception:
-            logger.error(traceback.format_exc())
-
-    def __work(self, workdir: pathlib.Path):
-        while True:
-            with self._cond:
-                while not self._in_q and not self._done:
-                    self._cond.wait()
-                if self._done:
-                    return
-
-                commit_hash = self._in_q[0]
-                self._in_q = self._in_q[1:]
-
-                commit_out_dir = self._out_dir / commit_hash
-                commit_out_dir.mkdir()
-                stderr = (commit_out_dir / "stderr.txt").open("w")
-                stdout = (commit_out_dir / "stdout.txt").open("w")
-                env = dict(os.environ)
-                extra_output_dir = commit_out_dir / "output"
-                extra_output_dir.mkdir()
-                env["GIT_BRISECT_OUTPUT_DIR"] = str(extra_output_dir)
-
-                logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
-
-                if self._checkout_test_rev:
-                    run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
-                env["GIT_BRISECT_TEST_REVISION"] = commit_hash
-                try:
-                    p = subprocess.Popen(
-                        self._test_cmd, cwd=workdir,
-                        stderr=stderr, stdout=stdout, env=env)
-                except (PermissionError, FileNotFoundError) as e:
-                    logger.info(f"Error running at {commit_hash} ({e}), returning code 1")
-                    self._out_q.append((commit_hash, 1))
-                    self._cond.notify_all()
-                    continue
-
-                self._subprocesses[commit_hash] = p
-
-            p.communicate()
-            with (commit_out_dir / "returncode.txt").open("w") as f:
-                f.write(str(p.returncode))
-            with self._cond:
-                self._out_q.append((commit_hash, p.returncode))
-                del self._subprocesses[commit_hash]
-                stdout.close()
-                stderr.close()
-                self._cond.notify_all()
-
-    def wait(self):
-        with self._cond:
-            while len(self._out_q) == 0 and not self._cancel_event.is_set():
-                self._cond.wait()
-            if self._cancel_event.is_set():
-                return None, None
-            ret = self._out_q[0]
-            self._out_q = self._out_q[1:]
-            return ret
-
-    def interrupt_and_join(self):
-        with self._cond:
-            for commit_hash in self._subprocesses:
+        for commit_hash in self._subprocesses:
+            if commit_hash in range.commits():
                 self._cancel(commit_hash)
-            self._done = True
-            self._cond.notify_all()
-        for t in self._threads:
-            t.join()
 
-def do_brisect(args, pool, full_range):
+    async def wait(self):
+        dones, pending = await asyncio.wait(self._communicate_tasks,
+                                           return_when=asyncio.FIRST_COMPLETED)
+        ret = []
+        for done in dones:
+            commit_hash, returncode = done.result()
+            self._communicate_tasks = list(pending) # TODO avoid set/list roundtrip?
+            del self._subprocesses[commit_hash]
+            commit_out_dir = self._out_dir / commit_hash
+            with (commit_out_dir / "returncode.txt").open("w") as f:
+                f.write(str(returncode))
+            ret.append((commit_hash, returncode))
+        return ret
+
+    async def interrupt_and_join(self):
+        for commit_hash in self._subprocesses:
+            self._cancel(commit_hash)
+        if self._communicate_tasks:
+            await asyncio.wait(self._communicate_tasks)
+
+async def do_brisect(args, pool, full_range):
     # Note: a "culprit" is a commit that is bad and all of whose ancestors are
     # good. There may actually be more than one such commit, but sometimes it's
     # clearer to talk about "the" culprit anyway, that just means the one we're
@@ -326,22 +299,19 @@ def do_brisect(args, pool, full_range):
     # by the user, hence drop_include().
     untested_ranges = full_range.drop_include()
     while len(full_range.commits()) > 1:
-        # Start as many worker threads as possible, unless there's a result
-        # pending; that will influence which commits we need to test so there's
-        # po point in adding new ones until we've processed it. Here we do a
-        # breadth-first bisection of the overall range to divide it among
-        # available threads. That's not a fully optimal distribution; we want
-        # some algorithm that minimizes the average distance between the commits
-        # we test. But I can't think of such an algorithm; this one is easy to
-        # implement, still kinda fun, and produces not completely insane
-        # behaviour.
-        while untested_ranges and pool.num_pending() < pool.num_threads and not pool.out_q_length():
+        # Start as many worker threads as possible. Here we do a breadth-first
+        # bisection of the overall range to divide it among available threads.
+        # That's not a fully optimal distribution; we want some algorithm that
+        # minimizes the average distance between the commits we test. But I
+        # can't think of such an algorithm; this one is easy to implement, still
+        # kinda fun, and produces not completely insane behaviour.
+        while untested_ranges and pool.num_pending() < pool.num_threads:
             r = untested_ranges.pop(0)
             if not r.commits():
                 continue
 
             # Kick off a test
-            pool.enqueue(r.midpoint())
+            await pool.enqueue(r.midpoint())
             before, after = r.split(r.midpoint())
             untested_ranges += before.drop_include()
             untested_ranges.append(after)
@@ -351,37 +321,39 @@ def do_brisect(args, pool, full_range):
             # hill-climbing search.
             untested_ranges = sorted(untested_ranges, key=lambda r: len(r.commits()), reverse=True)
 
-        result_commit, returncode = pool.wait()
-        if result_commit is None:
-            return None # Interrupted.
-        if result_commit not in full_range.commits():
-            continue  # We cancelled this one - result is not interesting or meaningful.
-        logger.info(f"Got result {returncode} for {describe(result_commit)}")
-        logger.debug(f"    Considering range {full_range}")
+        completions = await pool.wait()
+        for result_commit, returncode in completions:
+            if result_commit is None:
+                return None # Interrupted.
+            if result_commit not in full_range.commits():
+                continue  # We cancelled this one - result is not interesting or meaningful.
+            logger.info(f"Got result {returncode} for {describe(result_commit)}")
+            logger.debug(f"    Considering range {full_range}")
 
-        if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
-            (cancel, full_range) = full_range.split(result_commit)
-        else:                # This commit or one of its ancestors is a culprit.
-            (full_range, cancel) = full_range.split(result_commit)
+            if returncode == 0:  # There is a culprit that is not an ancestor of this commit.
+                (cancel, full_range) = full_range.split(result_commit)
+            else:                # This commit or one of its ancestors is a culprit.
+                (full_range, cancel) = full_range.split(result_commit)
 
-        logger.debug(f"    Canceling {cancel}, remaining: {full_range}")
-        pool.cancel(cancel)
+            logger.debug(f"    Canceling {cancel}, remaining: {full_range}")
+            pool.cancel(cancel)
 
-        # Drop known-* commits from future testing. subranges are either subsets
-        # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
-        # off a test for a commit within it, in which case we should have split
-        # it up).
-        untested_ranges = [s for s in untested_ranges if s.midpoint() in full_range.commits()]
+            # Drop known-* commits from future testing. subranges are either subsets
+            # of cancel, disjoint from it. (If one wasn't, that must imply we kicked
+            # off a test for a commit within it, in which case we should have split
+            # it up).
+            untested_ranges = [s for s in untested_ranges if s.midpoint() in full_range.commits()]
 
     return rev_parse(full_range.include)
 
-def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True,
+async def brisect(rev_range: str, args: list[str], out_dir: pathlib.Path, num_threads=8, use_worktrees=True,
             cancel: threading.Event = threading.Event()):
-    tmpdir = None
+
     if use_worktrees:
         tmpdir = pathlib.Path(tempfile.mkdtemp())
         worktrees = [tmpdir / f"brisect-worktree-{i}" for i in range(num_threads)]
     else:
+        tmpdir = None
         worktrees = []
 
     pool = None
@@ -393,18 +365,18 @@ def brisect(rev_range: str, args: Iterable[str], out_dir: pathlib.Path, num_thre
 
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
-                          checkout_test_rev=bool(worktrees),
+                          worktree_mode=bool(worktrees),
                           out_dir=out_dir, cancel=cancel)
 
-        return do_brisect(args, pool, RevRange.from_string(rev_range))
+        return await do_brisect(args, pool, RevRange.from_string(rev_range))
     finally:
         if pool:
             logger.info("Aborting pending tests...")
-            pool.interrupt_and_join()
+            await pool.interrupt_and_join()
             logger.info("...Pending tests aborted.")
         logger.info("Tearing down worktrees...")
         for w in worktrees:
-            run_cmd(["git", "worktree", "remove", "--force", w])
+            run_cmd(["git", "worktree", "remove", "--force", str(w)])
         logger.info("Done tearing down worktrees.")
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
@@ -481,7 +453,7 @@ def make_out_dir(args: argparse.Namespace, now: datetime.datetime) -> pathlib.Pa
 
     return out_dir
 
-def main(argv: list[str], output: TextIO, now: datetime.datetime,
+async def main(argv: list[str], output: TextIO, now: datetime.datetime,
          cancel: threading.Event = threading.Event()) -> int:
     args = parse_args(argv[1:])
 
@@ -494,7 +466,7 @@ def main(argv: list[str], output: TextIO, now: datetime.datetime,
     out_dir = make_out_dir(args, now)
     output.write(f'Writing output to {out_dir}\n')
 
-    result = brisect(args.range, args.cmd,
+    result = await brisect(args.range, args.cmd,
                         num_threads=args.num_threads,
                         use_worktrees=not args.no_worktrees,
                         out_dir=out_dir, cancel=cancel)
@@ -513,4 +485,4 @@ if __name__ == "__main__":
         signal.signal(signal.SIGINT, old_sigint_handler)
     signal.signal(signal.SIGINT, sigint_handler)
 
-    sys.exit(main(sys.argv, sys.stdout, datetime.datetime.now(), cancel))
+    sys.exit(asyncio.run(main(sys.argv, sys.stdout, datetime.datetime.now(), cancel)))
