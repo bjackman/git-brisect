@@ -179,25 +179,20 @@ class RevRange:
         return ret
 
 class WorkerPool:
-    # Note that there really shouldn't be any need for multi-threading here, we
-    # ought to just have a single thread and a bunch of subprocesses that
-    # directly run the user's test script. The problem is Python doesn't provide
-    # a portable way to select on a set of concurrent subproccesses. Also, why
-    # this condition variable quadrille for the inter-thread communication,
-    # can't we just do this like we would in Go? Yeah I dunno. queue.Queue
-    # doesn't seem to have an equivalent to closing a Go channel so you need
-    # some out-of-band "done" signal and at that point it seems cleaner to just
-    # roll a custom mechanism from scratch.
-    # OK, I think Python's new async stuff would be the way to go here. But... I
-    # can't be bothered to learn that.
-
+    # This was originally written without asyncio, before that Python's
+    # concurrency mechanisms were basically useless so I just dropped down to
+    # raw threading.Threads and a condition variable. Now that we have actual
+    # concurrency primitives this class feels pretty overcomplicated and could
+    # probably be removed. In particular the fact that we have all three of
+    # _subprocesses, _free_workdirs and _communicate_tasks feels sort of
+    # redundant.
 
     _subprocesses: dict[str, asyncio.subprocess.Process]
+    # These tasks return a commit hash and a returncode for the test.
     _communicate_tasks: list[asyncio.tasks.Task[tuple[str, int]]]
 
     def __init__(self, test_cmd: list[str], workdirs: Iterable[pathlib.Path],
                  worktree_mode: bool, out_dir: pathlib.Path, cancel: threading.Event):
-        # Used to synchronize enqueuement with the worker threads.
         self._subprocesses = {}
         self._communicate_tasks = []
         self._done = False
@@ -209,7 +204,6 @@ class WorkerPool:
         self.num_threads = len(self._free_workdirs)
 
     async def enqueue(self, rev):
-        # TODO: refactor to avoid this mess
         if not self._free_workdirs:
             raise RuntimeError("bug: No free workdirs")
         workdir = self._free_workdirs[0]
@@ -223,9 +217,9 @@ class WorkerPool:
         commit_out_dir.mkdir()
         stderr = (commit_out_dir / "stderr.txt").open("w")
         stdout = (commit_out_dir / "stdout.txt").open("w")
-        env = dict(os.environ)
         extra_output_dir = commit_out_dir / "output"
         extra_output_dir.mkdir()
+        env = dict(os.environ)
         env["GIT_BRISECT_OUTPUT_DIR"] = str(extra_output_dir)
 
         logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")

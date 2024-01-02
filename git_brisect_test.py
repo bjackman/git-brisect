@@ -89,6 +89,7 @@ class GitbrisectTest(unittest.TestCase):
             return []
         return self.read_stripped_lines("output.txt")
 
+# don't talk to me or my child class ever again
 class GitbrisectTestWithRepo(GitbrisectTest):
     def setUp(self):
         super().setUp()
