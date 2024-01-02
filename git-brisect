@@ -34,6 +34,13 @@ def run_cmd(args: list[str]) -> str:
             f'Stderr:\n{result.stderr.decode()}\nStdout:\n{result.stdout.decode()}')
     return result.stdout.decode()
 
+async def run_cmd_async(args: list[str]) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE)
+    stdout, _ = await proc.communicate()
+    return stdout.decode()
+
 def rev_parse(rev):
     return run_cmd(["git", "rev-parse", rev]).strip()
 
@@ -228,7 +235,7 @@ class WorkerPool:
 
         async def task():
             if self._worktree_mode:
-                run_cmd(["git", "-C", str(workdir), "checkout", commit])
+                await run_cmd_async(["git", "-C", str(workdir), "checkout", commit])
             try:
                 p = await asyncio.create_subprocess_exec(
                     self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
