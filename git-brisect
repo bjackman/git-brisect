@@ -234,14 +234,9 @@ class WorkerPool:
         logger.info(f"Kicking off test for {describe(commit)}, output in {commit_out_dir}")
 
         async def task():
-            if self._worktree_mode:
-                if not workdir.exists():
-                    logger.info(f"Setting up worktree for {describe(commit)}...")
-                    await run_cmd_async(["git", "worktree", "add", workdir, "HEAD"])
-                    logger.info(f"Done setting up worktree for {describe(commit)}.")
-
-                await run_cmd_async(["git", "-C", str(workdir), "checkout", commit])
             try:
+                if self._worktree_mode:
+                    await self._setup_worktree(workdir, commit)
                 p = await asyncio.create_subprocess_exec(
                     self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
                     stderr=stderr, stdout=stdout, env=env)
@@ -260,6 +255,15 @@ class WorkerPool:
                 stderr.close()
 
         self._communicate_tasks.add(asyncio.create_task(task()))
+
+
+    async def _setup_worktree(self, path: pathlib.Path, commit: Rev):
+        if not path.exists():
+            logger.info(f"Setting up worktree {path}...")
+            await run_cmd_async(["git", "worktree", "add", path, "HEAD"])
+            logger.info(f"Done setting up worktree {path}.")
+
+        await run_cmd_async(["git", "-C", str(path), "checkout", commit])
 
     def num_pending(self):
         return len(self._communicate_tasks)
@@ -295,7 +299,7 @@ class WorkerPool:
         for commit_hash in self._subprocesses:
             self._cancel(commit_hash)
         if self._communicate_tasks:
-            await asyncio.wait(self._communicate_tasks)
+            await asyncio.gather(*self._communicate_tasks)
 
         if self._worktree_mode:
             logger.info("Tearing down worktrees...")
@@ -484,4 +488,9 @@ async def main(argv: list[str], output: TextIO, now: datetime.datetime) -> int:
     return 0
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main(sys.argv, sys.stdout, datetime.datetime.now())))
+    try:
+        sys.exit(asyncio.run(main(sys.argv, sys.stdout, datetime.datetime.now())))
+    # Avoid log spam on shutdown.
+    except KeyboardInterrupt:
+        sys.stderr.write("Interrupted")
+        sys.exit(-2)
