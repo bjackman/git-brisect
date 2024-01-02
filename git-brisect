@@ -235,6 +235,11 @@ class WorkerPool:
 
         async def task():
             if self._worktree_mode:
+                if not workdir.exists():
+                    logger.info(f"Setting up worktree for {describe(commit)}...")
+                    await run_cmd_async(["git", "worktree", "add", workdir, "HEAD"])
+                    logger.info(f"Done setting up worktree for {describe(commit)}.")
+
                 await run_cmd_async(["git", "-C", str(workdir), "checkout", commit])
             try:
                 p = await asyncio.create_subprocess_exec(
@@ -286,11 +291,20 @@ class WorkerPool:
             ret.append((commit_hash, returncode))
         return ret
 
-    async def interrupt_and_join(self):
+    async def shutdown(self):
         for commit_hash in self._subprocesses:
             self._cancel(commit_hash)
         if self._communicate_tasks:
             await asyncio.wait(self._communicate_tasks)
+
+        if self._worktree_mode:
+            logger.info("Tearing down worktrees...")
+            tasks = []
+            for w in self._free_workdirs:
+                if w.exists():
+                    tasks.append(run_cmd_async(["git", "worktree", "remove", "--force", str(w)]))
+            await asyncio.gather(*tasks)
+            logger.info("Done tearing down worktrees.")
 
 async def do_brisect(args, pool, full_range):
     # Note: a "culprit" is a commit that is bad and all of whose ancestors are
@@ -363,11 +377,6 @@ async def brisect(rev_range: str, args: list[str], out_dir: pathlib.Path, num_th
 
     pool = None
     try:
-        logger.info("Setting up worktrees...")
-        for w in worktrees:
-            run_cmd(["git", "worktree", "add", w, "HEAD"])
-        logger.info("Done setting up worktrees.")
-
         pool = WorkerPool(test_cmd=args,
                           workdirs=worktrees or [pathlib.Path.cwd() for _ in range(num_threads)],
                           worktree_mode=bool(worktrees), out_dir=out_dir)
@@ -376,12 +385,8 @@ async def brisect(rev_range: str, args: list[str], out_dir: pathlib.Path, num_th
     finally:
         if pool:
             logger.info("Aborting pending tests...")
-            await pool.interrupt_and_join()
+            await pool.shutdown()
             logger.info("...Pending tests aborted.")
-        logger.info("Tearing down worktrees...")
-        for w in worktrees:
-            run_cmd(["git", "worktree", "remove", "--force", str(w)])
-        logger.info("Done tearing down worktrees.")
         if tmpdir is not None:
             shutil.rmtree(tmpdir)
 
