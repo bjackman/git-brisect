@@ -205,7 +205,7 @@ class WorkerPool:
         self._free_workdirs = list(workdirs)
         self.num_threads = len(self._free_workdirs)
 
-    async def enqueue(self, commit: CommitHash):
+    def enqueue(self, commit: CommitHash):
         if not self._free_workdirs:
             raise RuntimeError("bug: No free workdirs")
         workdir = self._free_workdirs[0]
@@ -222,40 +222,35 @@ class WorkerPool:
         extra_output_dir.mkdir()
         env = dict(os.environ)
         env["GIT_BRISECT_OUTPUT_DIR"] = str(extra_output_dir)
+        env["GIT_BRISECT_TEST_REVISION"] = commit
 
         logger.info(f"Kicking off test for {describe(commit)}, output in {commit_out_dir}")
 
-        def cleanup():
-            self._free_workdirs.append(workdir)
-            stdout.close()
-            stderr.close()
-
-        if self._worktree_mode:
-            run_cmd(["git", "-C", str(workdir), "checkout", commit])
-        env["GIT_BRISECT_TEST_REVISION"] = commit
-        try:
-            p = await asyncio.create_subprocess_exec(
-                self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
-                stderr=stderr, stdout=stdout, env=env)
-        except (PermissionError, FileNotFoundError) as e:
-            # This behaviour is copied from "git bisect run" i.e. invalid
-            # commands are treated just like failures.
-            logger.info(f"Error running at {commit} ({e}), returning code 1")
-            async def fake_communicate():
-                cleanup()
+        async def task():
+            if self._worktree_mode:
+                run_cmd(["git", "-C", str(workdir), "checkout", commit])
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
+                    stderr=stderr, stdout=stdout, env=env)
+            except (PermissionError, FileNotFoundError) as e:
+                # This behaviour is copied from "git bisect run" i.e. invalid
+                # commands are treated just like failures.
+                logger.info(f"Error running at {commit} ({e}), returning code 1")
                 return (commit, 1)
-            self._communicate_tasks.add(asyncio.create_task(fake_communicate()))
-            return
+            else:
+                self._subprocesses[commit] = p
+                await p.wait()
+                return commit, p.returncode
+            finally:
+                self._free_workdirs.append(workdir)
+                stdout.close()
+                stderr.close()
 
-        self._subprocesses[commit] = p
-        async def communicate():
-            await p.wait()
-            cleanup()
-            return commit, p.returncode
-        self._communicate_tasks.add(asyncio.create_task(communicate()))
+        self._communicate_tasks.add(asyncio.create_task(task()))
 
     def num_pending(self):
-        return len(self._subprocesses)
+        return len(self._communicate_tasks)
 
     def _cancel(self, commit_hash: CommitHash):
         with (self._out_dir / commit_hash / "CANCELED").open("w"):
@@ -314,9 +309,8 @@ async def do_brisect(args, pool, full_range):
             if not r.commits():
                 continue
 
-            # Kick off a test. We don't actually need to await this right now,
-            # but it's simpler.
-            await pool.enqueue(r.midpoint())
+            # Kick off a test.
+            pool.enqueue(r.midpoint())
             before, after = r.split(r.midpoint())
             untested_ranges += before.drop_include()
             untested_ranges.append(after)
