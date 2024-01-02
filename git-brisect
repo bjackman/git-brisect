@@ -189,12 +189,12 @@ class WorkerPool:
 
     _subprocesses: dict[str, asyncio.subprocess.Process]
     # These tasks return a commit hash and a returncode for the test.
-    _communicate_tasks: list[asyncio.tasks.Task[tuple[str, int]]]
+    _communicate_tasks: set[asyncio.tasks.Task[tuple[str, int]]]
 
     def __init__(self, test_cmd: list[str], workdirs: Iterable[pathlib.Path],
                  worktree_mode: bool, out_dir: pathlib.Path, cancel: threading.Event):
         self._subprocesses = {}
-        self._communicate_tasks = []
+        self._communicate_tasks = set()
         self._done = False
         self._cancel_event = cancel
         self._test_cmd = test_cmd
@@ -243,7 +243,7 @@ class WorkerPool:
             async def fake_communicate():
                 cleanup()
                 return (commit_hash, 1)
-            self._communicate_tasks.append(asyncio.create_task(fake_communicate()))
+            self._communicate_tasks.add(asyncio.create_task(fake_communicate()))
             return
 
         self._subprocesses[commit_hash] = p
@@ -251,7 +251,7 @@ class WorkerPool:
             await p.wait()
             cleanup()
             return commit_hash, p.returncode
-        self._communicate_tasks.append(asyncio.create_task(communicate()))
+        self._communicate_tasks.add(asyncio.create_task(communicate()))
 
     def num_pending(self):
         return len(self._subprocesses)
@@ -267,13 +267,13 @@ class WorkerPool:
             if commit_hash in range.commits():
                 self._cancel(commit_hash)
 
-    async def wait(self):
+    async def wait(self) -> list[tuple[str, int]]:
         dones, pending = await asyncio.wait(self._communicate_tasks,
                                            return_when=asyncio.FIRST_COMPLETED)
         ret = []
         for done in dones:
             commit_hash, returncode = done.result()
-            self._communicate_tasks = list(pending) # TODO avoid set/list roundtrip?
+            self._communicate_tasks = pending # TODO avoid set/list roundtrip?
             if commit_hash in self._subprocesses: # In case creating subprocess failed.
                 del self._subprocesses[commit_hash]
             commit_out_dir = self._out_dir / commit_hash
@@ -312,7 +312,8 @@ async def do_brisect(args, pool, full_range):
             if not r.commits():
                 continue
 
-            # Kick off a test
+            # Kick off a test. We don't actually need to await this right now,
+            # but it's simpler.
             await pool.enqueue(r.midpoint())
             before, after = r.split(r.midpoint())
             untested_ranges += before.drop_include()
