@@ -266,6 +266,20 @@ class TestBisection(GitbrisectTestWithRepo, unittest.IsolatedAsyncioTestCase):
     async def test_limited_threads(self):
         await self._test_thread_limit(4)
 
+    async def test_no_existe(self):
+        init = commit("init")
+        culprit = commit("middle") # init won't be tested as it's excluded.
+        commit("middle")
+        commit("middle")
+        end = commit("end")
+
+        self.logger.info(git("log", "--graph", "--all", "--oneline"))
+
+        result = await git_brisect.brisect(
+            f"{init}..{end}", ["bailando_jenriquie_iglesaias.mp3.exe"],
+            out_dir=pathlib.Path.cwd())
+        self.assertEqual(result, culprit)
+
     # TODO:
     #
     #  pathological args? Like good and bad aren't ancestors?

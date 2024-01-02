@@ -224,25 +224,32 @@ class WorkerPool:
 
         logger.info(f"Kicking off test for {describe(commit_hash)}, output in {commit_out_dir}")
 
+        def cleanup():
+            self._free_workdirs.append(workdir)
+            stdout.close()
+            stderr.close()
+
         if self._worktree_mode:
             run_cmd(["git", "-C", str(workdir), "checkout", commit_hash])
         env["GIT_BRISECT_TEST_REVISION"] = commit_hash
-        p = await asyncio.create_subprocess_exec(
-            self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
-            stderr=stderr, stdout=stdout, env=env)
-        # TODO:
-        # except (PermissionError, FileNotFoundError) as e:
-        #     logger.info(f"Error running at {commit_hash} ({e}), returning code 1")
-        #     self._out_q.append((commit_hash, 1))
-        #     self._cond.notify_all()
-        #     continue
+        try:
+            p = await asyncio.create_subprocess_exec(
+                self._test_cmd[0], *self._test_cmd[1:], cwd=workdir,
+                stderr=stderr, stdout=stdout, env=env)
+        except (PermissionError, FileNotFoundError) as e:
+            # This behaviour is copied from "git bisect run" i.e. invalid
+            # commands are treated just like failures.
+            logger.info(f"Error running at {commit_hash} ({e}), returning code 1")
+            async def fake_communicate():
+                cleanup()
+                return (commit_hash, 1)
+            self._communicate_tasks.append(asyncio.create_task(fake_communicate()))
+            return
 
         self._subprocesses[commit_hash] = p
         async def communicate():
             await p.wait()
-            self._free_workdirs.append(workdir)
-            stdout.close()
-            stderr.close()
+            cleanup()
             return commit_hash, p.returncode
         self._communicate_tasks.append(asyncio.create_task(communicate()))
 
@@ -267,7 +274,8 @@ class WorkerPool:
         for done in dones:
             commit_hash, returncode = done.result()
             self._communicate_tasks = list(pending) # TODO avoid set/list roundtrip?
-            del self._subprocesses[commit_hash]
+            if commit_hash in self._subprocesses: # In case creating subprocess failed.
+                del self._subprocesses[commit_hash]
             commit_out_dir = self._out_dir / commit_hash
             with (commit_out_dir / "returncode.txt").open("w") as f:
                 f.write(str(returncode))
