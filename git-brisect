@@ -215,7 +215,7 @@ class WorkerPool:
     def enqueue(self, rev):
         with self._cond:
             self._in_q.append(rev_parse(rev))
-            logger.debug(f"Enqueued {describe(rev)}, new queue depth {len(self._in_q)}")
+            logger.debug("Enqueued %s, new queue depth %d", rev, len(self._in_q))
             self._cond.notify_all()
 
     def num_pending(self):
