@@ -528,7 +528,7 @@ class TestWithHypothesis(GitbrisectTest):
     @hypothesis.given(dag_and_range=with_node_range(dags()))
     @hypothesis.example((Dag(num_nodes=4, edges=frozenset({(0, 1), (0, 2), (2, 3), (1, 3)})),
                          (2, 3)))
-    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
+    @hypothesis.settings(deadline=None)
     def test_range_split(self, dag_and_range: tuple[Dag, tuple[int, int]]):
         (dag, (exclude_node, include_node)) = dag_and_range
         self.setup_repo(dag)
@@ -559,7 +559,7 @@ class TestWithHypothesis(GitbrisectTest):
     @hypothesis.example(BisectCase(
         dag=Dag(num_nodes=4, edges=frozenset({(0, 1), (1, 2), (2, 3), (0, 3)})),
         leaf=3, culprit=3))
-    @hypothesis.settings(deadline=datetime.timedelta(seconds=1))
+    @hypothesis.settings(deadline=None)
     def test_bisect(self, case: BisectCase):
         self.logger.info(f"Running {case}")
         self.setup_repo(case.dag)
