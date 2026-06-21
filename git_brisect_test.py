@@ -46,7 +46,7 @@ def commit(msg: str, tag: Optional[str] = None):
 
 def merge(msg: str, parents: list[str]):
     git("merge", "-m", msg, "--no-ff", *parents)
-    return git("rev-pase", "HEAD")
+    return git("rev-parse", "HEAD")
 
 class GitbrisectTest(unittest.TestCase):
     logger: logging.Logger
