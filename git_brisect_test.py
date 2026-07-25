@@ -338,6 +338,13 @@ class TestRevRange(GitbrisectTest):
         with self.assertRaises(git_brisect.BadRangeError):
             _ = git_brisect.RevRange.from_string("foo..bar baz")
 
+    def test_repr(self):
+        r = git_brisect.RevRange(exclude=["bar", "baz"], include="foo")
+        self.assertEqual(repr(r), "RevRange(foo ^bar ^baz)")
+
+        r = git_brisect.RevRange(exclude=[], include="foo")
+        self.assertEqual(repr(r), "RevRange(foo)")
+
 
 @dataclasses.dataclass
 class DagNode:
